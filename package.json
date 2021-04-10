@@ -1,0 +1,19 @@
+{
+  "name": "vnsync-server",
+  "version": "0.0.1",
+  "description": "The WebSocket server for VNSync.",
+  "main": "dist/index.js",
+  "scripts": {
+    "clean": "run-script-os",
+    "clean:win32": "if exist \".\\dist\" rd /s /q \".\\dist\"",
+    "clean:linux": "rm -rf ./dist",
+    "build": "npm run clean && tsc"
+  },
+  "author": "David Lysenko",
+  "license": "MIT",
+  "devDependencies": {
+    "run-script-os": "^1.1.6",
+    "typescript": "^4.2.4"
+  },
+  "dependencies": {}
+}
