@@ -42,6 +42,8 @@ export class VNSyncServer {
   }
 
   public close(): void {
+    console.log("Closing the server...");
+
     this.wsServer.close();
     this.httpServer.close();
   }
@@ -61,23 +63,41 @@ export class VNSyncServer {
   }
 
   private initServer(): void {
+    console.log("Initializing the server...");
+
     this.wsServer.on("connection", (socket) => {
+      console.log(`Socket ${socket.id}: connected`);
+
       socket.on("createRoom", (...args: unknown[]) => {
         const callback = args.pop() as (result: EventResult<string>) => void;
-        callback(this.onCreateRoom(socket, ...args));
+        const result = this.onCreateRoom(socket, ...args);
+
+        console.log(`Event createRoom emitted by ${socket.id}:`, result);
+
+        callback(result);
       });
 
       socket.on("joinRoom", (...args: unknown[]) => {
         const callback = args.pop() as (result: EventResult<undefined>) => void;
-        callback(this.onJoinRoom(socket, ...args));
+        const result = this.onJoinRoom(socket, ...args);
+
+        console.log(`Event joinRoom emitted by ${socket.id}:`, result);
+
+        callback(result);
       });
 
       socket.on("toggleReady", (...args: unknown[]) => {
         const callback = args.pop() as (result: EventResult<undefined>) => void;
-        callback(this.onToggleReady(socket));
+        const result = this.onToggleReady(socket);
+
+        console.log(`Event toggleReady emitted by ${socket.id}:`, result);
+
+        callback(result);
       });
 
       socket.on("disconnect", () => {
+        console.log(`Socket ${socket.id}: disconnected`);
+
         this.onDisconnect(socket);
 
         if (this.disconnectResolve !== null) {
@@ -121,6 +141,8 @@ export class VNSyncServer {
     this.rooms.set(roomName, { connections: [connection], host: connection });
     socket.join(roomName);
     this.emitStateChange(roomName);
+
+    console.log(`User ${username}: created room ${roomName}`);
 
     return {
       status: "ok",
@@ -188,6 +210,8 @@ export class VNSyncServer {
     socket.join(roomName);
     this.emitStateChange(roomName);
 
+    console.log(`User ${username}: joined room ${roomName}`);
+
     return {
       status: "ok",
     };
@@ -210,6 +234,10 @@ export class VNSyncServer {
     connection.isReady = !connection.isReady;
     this.entireRoomReadyCheck(connection.room);
     this.emitStateChange(connection.room);
+
+    console.log(
+      `User ${connection.room}/${connection.username}: toggled state`
+    );
 
     return {
       status: "ok",
@@ -236,6 +264,8 @@ export class VNSyncServer {
       }
 
       this.rooms.delete(connection.room);
+
+      console.log(`Room ${connection.room}: deleted`);
     }
 
     // Emit a state change event if not host.
@@ -245,6 +275,8 @@ export class VNSyncServer {
     }
 
     this.connections.delete(socket.id);
+
+    console.log(`User ${connection.room}/${connection.username}: left`);
   }
 
   private emitStateChange(roomName: string) {
@@ -254,14 +286,15 @@ export class VNSyncServer {
       throw new Error(`Room "${roomName}" doesn't exist.`);
     }
 
-    this.wsServer.in(roomName).emit(
-      "roomStateChange",
-      room.connections.map((roomConnection) => ({
-        username: roomConnection.username,
-        isReady: roomConnection.isReady,
-        isHost: roomConnection.isHost,
-      }))
-    );
+    const state = room.connections.map((roomConnection) => ({
+      username: roomConnection.username,
+      isReady: roomConnection.isReady,
+      isHost: roomConnection.isHost,
+    }));
+
+    this.wsServer.in(roomName).emit("roomStateChange", state);
+
+    console.log(`Room ${roomName}: state changed`, state);
   }
 
   private entireRoomReadyCheck(roomName: string): void {
@@ -289,6 +322,8 @@ export class VNSyncServer {
     }
 
     this.wsServer.to(room.host.socket.id).emit("roomReady");
+
+    console.log(`Room ${roomName}: emitted room ready to host`);
   }
 
   private isInARoom(socketId: string): boolean {
