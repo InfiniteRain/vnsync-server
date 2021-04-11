@@ -1,4 +1,5 @@
 import express from "express";
+import path from "path";
 import { createServer, Server as HTTPServer } from "http";
 import { Server, Socket } from "socket.io";
 import { Connection } from "./interfaces/Connection";
@@ -17,6 +18,15 @@ export class VNSyncServer {
   private disconnectResolve: (() => void) | null = null;
 
   public constructor() {
+    // todo: remove / refactor this
+    this.expressApp.get(/^(?!\/pensive.svg$).*/, (_, res) => {
+      res.sendFile(path.join(__dirname + "/../assets/index.html"));
+    });
+
+    this.expressApp.get("/pensive.svg", (_, res) => {
+      res.sendFile(path.join(__dirname + "/../assets/pensive.svg"));
+    });
+
     this.httpServer = createServer(this.expressApp);
     this.wsServer = new Server(this.httpServer);
 
