@@ -12,6 +12,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "target": "es2015"
-  },
-  "exclude": ["src/**/*.test.ts"]
+  }
 }

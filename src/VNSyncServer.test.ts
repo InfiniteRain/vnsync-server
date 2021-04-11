@@ -2,6 +2,7 @@ import { io, Socket } from "socket.io-client";
 import { VNSyncServer } from "./VNSyncServer";
 import { EventResult } from "./interfaces/EventResult";
 import { Connection } from "./interfaces/Connection";
+import { cloneDeep } from "lodash";
 
 const promiseEmit = <T>(
   socket: Socket,
@@ -47,6 +48,84 @@ describe("vnsync server", () => {
     }
 
     return connection;
+  };
+
+  const addNewUserToARoom = async (
+    username?: string,
+    roomName?: string
+  ): Promise<Socket> => {
+    if (username === undefined || roomName === undefined) {
+      throw new Error(
+        `malformed data passed: username="${username}"; roomName="${roomName}"`
+      );
+    }
+
+    const newUser = getNewWsClient();
+    const result = await promiseEmit<EventResult<undefined>>(
+      newUser,
+      "joinRoom",
+      username,
+      roomName
+    );
+
+    expect(result.status).toEqual("ok");
+
+    return newUser;
+  };
+
+  const createRoom = async (socket: Socket): Promise<string> => {
+    const result = await promiseEmit<EventResult<string>>(
+      socket,
+      "createRoom",
+      "user"
+    );
+
+    expect(result.status).toEqual("ok");
+
+    if (result.data === undefined) {
+      throw new Error("room name is undefined");
+    }
+
+    return result.data;
+  };
+
+  const emitToggleReady = async (
+    socket: Socket
+  ): Promise<EventResult<void>> => {
+    return await promiseEmit<EventResult<void>>(socket, "toggleReady");
+  };
+
+  const generateEventCounter = (
+    limit: number
+  ): [() => void, (count: number) => Promise<void>] => {
+    let counter = 0;
+    const counterResolveFunctions = new Map<number, (value: void) => void>();
+
+    const counterOf = (count: number): Promise<void> => {
+      if (counterResolveFunctions.has(count)) {
+        throw new Error("promise for this count has already been generated");
+      }
+
+      return new Promise<void>((resolve) => {
+        counterResolveFunctions.set(count, resolve);
+      });
+    };
+
+    const advanceEventCounter = () => {
+      counter++;
+
+      if (counter > limit) {
+        throw new Error("event counter broke the limit");
+      }
+
+      const counterResolve = counterResolveFunctions.get(counter);
+
+      if (counterResolve) {
+        counterResolve();
+      }
+    };
+
+    return [advanceEventCounter, counterOf];
   };
 
   beforeEach(() => {
@@ -324,15 +403,8 @@ describe("vnsync server", () => {
       expect(wsServer.roomsSnapshot.size).toEqual(1);
       expect(wsServer.connectionsSnapshot.size).toEqual(1);
 
-      const newUser = getNewWsClient();
-      const result2 = await promiseEmit<EventResult<undefined>>(
-        newUser,
-        "joinRoom",
-        "user2",
-        result.data
-      );
+      await addNewUserToARoom("user2", result.data);
 
-      expect(result2.status).toEqual("ok");
       expect(wsServer.roomsSnapshot.size).toEqual(1);
       expect(wsServer.connectionsSnapshot.size).toEqual(2);
 
@@ -357,15 +429,8 @@ describe("vnsync server", () => {
       expect(wsServer.roomsSnapshot.size).toEqual(1);
       expect(wsServer.connectionsSnapshot.size).toEqual(1);
 
-      const newUser = getNewWsClient();
-      const result2 = await promiseEmit<EventResult<undefined>>(
-        newUser,
-        "joinRoom",
-        "user2",
-        result.data
-      );
+      await addNewUserToARoom("user2", result.data);
 
-      expect(result2.status).toEqual("ok");
       expect(wsServer.roomsSnapshot.size).toEqual(1);
       expect(wsServer.connectionsSnapshot.size).toEqual(2);
 
@@ -390,15 +455,7 @@ describe("vnsync server", () => {
 
       expect(roomConnectionsSnaphot?.connections.length).toEqual(1);
 
-      const newUser = getNewWsClient();
-      const result2 = await promiseEmit<EventResult<undefined>>(
-        newUser,
-        "joinRoom",
-        "user2",
-        roomName
-      );
-
-      expect(result2.status).toEqual("ok");
+      await addNewUserToARoom("user2", roomName);
 
       const roomConnectionsSnaphot2 = wsServer.roomsSnapshot.get(roomName);
 
@@ -411,6 +468,274 @@ describe("vnsync server", () => {
 
       expect(roomConnectionsSnaphot3?.connections.length).toEqual(1);
       expect(roomConnectionsSnaphot3?.connections[0].username).toEqual("user");
+    });
+  });
+
+  describe("ready logic tests", () => {
+    test("user attempts to toggle the ready state while not in a room", async () => {
+      const result = await emitToggleReady(wsClients[0]);
+
+      expect(result.status).toEqual("fail");
+      expect(result.failMessage).toEqual("This user is not yet in a room.");
+      expect(result.data).toBeUndefined();
+    });
+
+    test("users receive state updates once they create or join a room", async () => {
+      const expectedRoomState = [
+        { username: "user", isHost: true, isReady: false },
+      ];
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(3);
+      const waitFor1st = counterOf(1);
+      const waitFor3rd = counterOf(3);
+
+      wsClients[0].on("roomStateChange", (state) => {
+        expect(state).toEqual(expectedRoomState);
+        advanceEventCounter();
+      });
+
+      const roomName = await createRoom(wsClients[0]);
+      await waitFor1st;
+
+      expectedRoomState.push({
+        username: "user2",
+        isHost: false,
+        isReady: false,
+      });
+
+      const newUser = getNewWsClient();
+      newUser.on("roomStateChange", (state) => {
+        expect(state).toEqual(expectedRoomState);
+        advanceEventCounter();
+      });
+
+      const result = await promiseEmit<EventResult<undefined>>(
+        newUser,
+        "joinRoom",
+        "user2",
+        roomName
+      );
+
+      expect(result.status).toEqual("ok");
+
+      await waitFor3rd;
+    });
+
+    test("users receive a state update once another user from the same room leaves", async () => {
+      const roomName = await createRoom(wsClients[0]);
+      const user2 = await addNewUserToARoom("user2", roomName);
+      const user3 = await addNewUserToARoom("user3", roomName);
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(2);
+      const waitFor2nd = counterOf(2);
+
+      const expectedRoomState = [
+        { username: "user", isHost: true, isReady: false },
+        { username: "user3", isHost: false, isReady: false },
+      ];
+
+      wsClients[0].on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      user3.on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      user2.disconnect();
+      await wsServer.awaitForDisconnect();
+      await waitFor2nd;
+    });
+
+    test("users can toggle ready status and everyone receives a state update", async () => {
+      const roomName = await createRoom(wsClients[0]);
+      const user2 = await addNewUserToARoom("user2", roomName);
+      const user3 = await addNewUserToARoom("user3", roomName);
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(9);
+      const waitFor3rd = counterOf(3);
+      const waitFor6th = counterOf(6);
+      const waitFor9th = counterOf(9);
+
+      const expectedRoomState = [
+        { username: "user", isHost: true, isReady: true },
+        { username: "user2", isHost: false, isReady: false },
+        { username: "user3", isHost: false, isReady: false },
+      ];
+
+      wsClients[0].on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      user2.on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      user3.on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      const result = await emitToggleReady(wsClients[0]);
+      expect(result.status).toEqual("ok");
+
+      await waitFor3rd;
+
+      expectedRoomState[2].isReady = true;
+      const result2 = await emitToggleReady(user3);
+      expect(result2.status).toEqual("ok");
+
+      await waitFor6th;
+
+      expectedRoomState[0].isReady = false;
+      const result3 = await emitToggleReady(wsClients[0]);
+      expect(result3.status).toEqual("ok");
+
+      await waitFor9th;
+    });
+
+    test("ready status resets once everyone is ready and an event is emited to host", async () => {
+      const roomName = await createRoom(wsClients[0]);
+      const user2 = await addNewUserToARoom("user2", roomName);
+      const user3 = await addNewUserToARoom("user3", roomName);
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(9);
+      const waitFor3rd = counterOf(3);
+      const waitFor6th = counterOf(6);
+      const waitFor9th = counterOf(9);
+
+      const [advanceReadyEventCounter, counterOfReady] = generateEventCounter(
+        1
+      );
+      const waitFor1stReady = counterOfReady(1);
+
+      const expectedRoomState = [
+        { username: "user", isHost: true, isReady: true },
+        { username: "user2", isHost: false, isReady: false },
+        { username: "user3", isHost: false, isReady: false },
+      ];
+
+      wsClients[0].on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      wsClients[0].on("roomReady", () => {
+        advanceReadyEventCounter();
+      });
+
+      user2.on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      user3.on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      await emitToggleReady(wsClients[0]);
+      await waitFor3rd;
+
+      expectedRoomState[1].isReady = true;
+      await emitToggleReady(user2);
+      await waitFor6th;
+
+      expectedRoomState[0].isReady = false;
+      expectedRoomState[1].isReady = false;
+      await emitToggleReady(user3);
+      await waitFor9th;
+      await waitFor1stReady;
+    });
+
+    test("ready status resets once the only user that is in a non-ready status disconnects", async () => {
+      const roomName = await createRoom(wsClients[0]);
+      const user2 = await addNewUserToARoom("user2", roomName);
+      const user3 = await addNewUserToARoom("user3", roomName);
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(6);
+      const waitFor2nd = counterOf(2);
+      const waitFor4th = counterOf(4);
+      const waitFor6th = counterOf(6);
+
+      const [advanceReadyEventCounter, counterOfReady] = generateEventCounter(
+        1
+      );
+      const waitFor1stReady = counterOfReady(1);
+
+      const expectedRoomState = [
+        { username: "user", isHost: true, isReady: true },
+        { username: "user2", isHost: false, isReady: false },
+        { username: "user3", isHost: false, isReady: false },
+      ];
+
+      wsClients[0].on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      wsClients[0].on("roomReady", () => {
+        advanceReadyEventCounter();
+      });
+
+      user3.on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      await emitToggleReady(wsClients[0]);
+      await waitFor2nd;
+
+      expectedRoomState[2].isReady = true;
+      await emitToggleReady(user3);
+      await waitFor4th;
+
+      expectedRoomState.splice(1, 1);
+      expectedRoomState[0].isReady = false;
+      expectedRoomState[1].isReady = false;
+      user2.disconnect();
+      await wsServer.awaitForDisconnect();
+      await waitFor6th;
+      await waitFor1stReady;
+    });
+
+    test("ready status resets properly when the host is alone", async () => {
+      await createRoom(wsClients[0]);
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(2);
+      const waitFor1st = counterOf(1);
+      const waitFor2nd = counterOf(2);
+
+      const [advanceReadyEventCounter, counterOfReady] = generateEventCounter(
+        2
+      );
+      const waitFor1stReady = counterOfReady(1);
+      const waitFor2ndReady = counterOfReady(2);
+
+      const expectedRoomState = [
+        { username: "user", isHost: true, isReady: false },
+      ];
+
+      wsClients[0].on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceEventCounter();
+      });
+
+      wsClients[0].on("roomReady", () => {
+        advanceReadyEventCounter();
+      });
+
+      await emitToggleReady(wsClients[0]);
+      await waitFor1st;
+      await waitFor1stReady;
+
+      await emitToggleReady(wsClients[0]);
+      await waitFor2nd;
+      await waitFor2ndReady;
     });
   });
 });

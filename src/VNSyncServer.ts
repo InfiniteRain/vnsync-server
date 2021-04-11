@@ -62,6 +62,11 @@ export class VNSyncServer {
         callback(this.onJoinRoom(socket, ...args));
       });
 
+      socket.on("toggleReady", (...args: unknown[]) => {
+        const callback = args.pop() as (result: EventResult<undefined>) => void;
+        callback(this.onToggleReady(socket));
+      });
+
       socket.on("disconnect", () => {
         this.onDisconnect(socket);
 
@@ -94,10 +99,18 @@ export class VNSyncServer {
     }
 
     const roomName = this.generateRoomName();
-    const connection = { username, isHost: true, room: roomName, socket };
+    const connection = {
+      username,
+      isHost: true,
+      room: roomName,
+      socket,
+      isReady: false,
+    };
 
     this.connections.set(socket.id, connection);
-    this.rooms.set(roomName, { connections: [connection] });
+    this.rooms.set(roomName, { connections: [connection], host: connection });
+    socket.join(roomName);
+    this.emitStateChange(roomName);
 
     return {
       status: "ok",
@@ -152,10 +165,41 @@ export class VNSyncServer {
       }
     }
 
-    const connection = { username, isHost: false, room: roomName, socket };
+    const connection = {
+      username,
+      isHost: false,
+      room: roomName,
+      socket,
+      isReady: false,
+    };
 
     this.connections.set(socket.id, connection);
     room.connections.push(connection);
+    socket.join(roomName);
+    this.emitStateChange(roomName);
+
+    return {
+      status: "ok",
+    };
+  }
+
+  private onToggleReady(socket: Socket): EventResult<undefined> {
+    if (!this.isInARoom(socket.id)) {
+      return {
+        status: "fail",
+        failMessage: "This user is not yet in a room.",
+      };
+    }
+
+    const connection = this.connections.get(socket.id);
+
+    if (!connection) {
+      throw new Error("The connection is not present in the connections map.");
+    }
+
+    connection.isReady = !connection.isReady;
+    this.entireRoomReadyCheck(connection.room);
+    this.emitStateChange(connection.room);
 
     return {
       status: "ok",
@@ -184,7 +228,57 @@ export class VNSyncServer {
       this.rooms.delete(connection.room);
     }
 
+    // Emit a state change event if not host.
+    if (!connection.isHost) {
+      this.entireRoomReadyCheck(connection.room);
+      this.emitStateChange(connection.room);
+    }
+
     this.connections.delete(socket.id);
+  }
+
+  private emitStateChange(roomName: string) {
+    const room = this.rooms.get(roomName);
+
+    if (!room) {
+      throw new Error(`Room "${roomName}" doesn't exist.`);
+    }
+
+    this.wsServer.in(roomName).emit(
+      "roomStateChange",
+      room.connections.map((roomConnection) => ({
+        username: roomConnection.username,
+        isReady: roomConnection.isReady,
+        isHost: roomConnection.isHost,
+      }))
+    );
+  }
+
+  private entireRoomReadyCheck(roomName: string): void {
+    const room = this.rooms.get(roomName);
+
+    if (!room) {
+      throw new Error("The room is not present in the rooms map.");
+    }
+
+    if (room.connections.length === 0) {
+      return;
+    }
+
+    const everyoneIsReady = room.connections.reduce(
+      (previousValue, currentValue) => previousValue && currentValue.isReady,
+      room.connections[0].isReady
+    );
+
+    if (!everyoneIsReady) {
+      return;
+    }
+
+    for (const roomConnection of room.connections) {
+      roomConnection.isReady = false;
+    }
+
+    this.wsServer.to(room.host.socket.id).emit("roomReady");
   }
 
   private isInARoom(socketId: string): boolean {
