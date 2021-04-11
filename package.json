@@ -7,8 +7,9 @@
     "clean": "run-script-os",
     "clean:win32": "if exist \".\\dist\" rd /s /q \".\\dist\"",
     "clean:linux": "rm -rf ./dist",
+    "start": "node ./dist/index.js",
     "build": "npm run clean && tsc -p ./tsconfig.build.json",
-    "buildRun": "npm run build && node ./dist/index.js"
+    "buildStart": "npm run build && npm run start"
   },
   "author": "David Lysenko",
   "license": "MIT",
