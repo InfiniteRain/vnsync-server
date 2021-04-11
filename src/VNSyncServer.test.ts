@@ -307,7 +307,7 @@ describe("vnsync server", () => {
       expect(wsServer.connectionsSnapshot.size).toEqual(1);
 
       closeWsSocket(0);
-      await wsServer.awaitForNextDisconnect();
+      await wsServer.awaitForDisconnect();
 
       expect(wsServer.roomsSnapshot.size).toEqual(0);
       expect(wsServer.connectionsSnapshot.size).toEqual(0);
@@ -337,7 +337,7 @@ describe("vnsync server", () => {
       expect(wsServer.connectionsSnapshot.size).toEqual(2);
 
       closeWsSocket(1);
-      await wsServer.awaitForNextDisconnect();
+      await wsServer.awaitForDisconnect();
 
       expect(wsServer.roomsSnapshot.size).toEqual(1);
       expect(wsServer.connectionsSnapshot.size).toEqual(1);
@@ -370,7 +370,7 @@ describe("vnsync server", () => {
       expect(wsServer.connectionsSnapshot.size).toEqual(2);
 
       closeWsSocket(0);
-      await wsServer.awaitForNextDisconnect();
+      await wsServer.awaitForDisconnect();
 
       expect(wsServer.roomsSnapshot.size).toEqual(0);
       expect(wsServer.connectionsSnapshot.size).toEqual(0);
@@ -405,7 +405,7 @@ describe("vnsync server", () => {
       expect(roomConnectionsSnaphot2?.connections.length).toEqual(2);
 
       closeWsSocket(1);
-      await wsServer.awaitForNextDisconnect();
+      await wsServer.awaitForDisconnect();
 
       const roomConnectionsSnaphot3 = wsServer.roomsSnapshot.get(roomName);
 

@@ -44,7 +44,7 @@ export class VNSyncServer {
     return cloneDeep(this.rooms);
   }
 
-  public awaitForNextDisconnect(): Promise<void> {
+  public awaitForDisconnect(): Promise<void> {
     return new Promise((resolve) => {
       this.disconnectResolve = resolve;
     });
@@ -53,11 +53,13 @@ export class VNSyncServer {
   private initServer(): void {
     this.wsServer.on("connection", (socket) => {
       socket.on("createRoom", (...args: unknown[]) => {
-        this.onCreateRoom(socket, ...args);
+        const callback = args.pop() as (result: EventResult<string>) => void;
+        callback(this.onCreateRoom(socket, ...args));
       });
 
       socket.on("joinRoom", (...args: unknown[]) => {
-        this.onJoinRoom(socket, ...args);
+        const callback = args.pop() as (result: EventResult<undefined>) => void;
+        callback(this.onJoinRoom(socket, ...args));
       });
 
       socket.on("disconnect", () => {
@@ -71,25 +73,24 @@ export class VNSyncServer {
     });
   }
 
-  private onCreateRoom(socket: Socket, ...args: unknown[]): void {
-    const callback = args.pop() as (result: EventResult<string>) => void;
-
-    if (this.isActive(socket.id)) {
-      callback({
+  private onCreateRoom(
+    socket: Socket,
+    ...args: unknown[]
+  ): EventResult<string> {
+    if (this.isInARoom(socket.id)) {
+      return {
         status: "fail",
         failMessage: "This user is already in a room.",
-      });
-      return;
+      };
     }
 
     const username = args[0] as string;
 
     if (typeof username !== "string" || username === "") {
-      callback({
+      return {
         status: "fail",
         failMessage: "Username should be a non-empty string.",
-      });
-      return;
+      };
     }
 
     const roomName = this.generateRoomName();
@@ -98,72 +99,67 @@ export class VNSyncServer {
     this.connections.set(socket.id, connection);
     this.rooms.set(roomName, { connections: [connection] });
 
-    callback({
+    return {
       status: "ok",
       data: roomName,
-    });
-    return;
+    };
   }
 
-  private onJoinRoom(socket: Socket, ...args: unknown[]): void {
-    const callback = args.pop() as (result: EventResult<undefined>) => void;
-
-    if (this.isActive(socket.id)) {
-      callback({
+  private onJoinRoom(
+    socket: Socket,
+    ...args: unknown[]
+  ): EventResult<undefined> {
+    if (this.isInARoom(socket.id)) {
+      return {
         status: "fail",
         failMessage: "This user is already in a room.",
-      });
-      return;
+      };
     }
 
     const username = args[0] as string;
 
     if (typeof username !== "string" || username === "") {
-      callback({
+      return {
         status: "fail",
         failMessage: "Username should be a non-empty string.",
-      });
-      return;
+      };
     }
 
     const roomName = args[1] as string;
 
     if (typeof roomName !== "string" || roomName === "") {
-      callback({
+      return {
         status: "fail",
         failMessage: "Room name should be a non-empty string.",
-      });
-      return;
+      };
     }
 
     const room = this.rooms.get(roomName);
 
     if (!room) {
-      callback({
+      return {
         status: "fail",
         failMessage: `Room "${roomName}" doesn't exist.`,
-      });
-      return;
+      };
     }
 
     for (const connection of room.connections) {
       if (connection.username === username) {
-        callback({
+        return {
           status: "fail",
           failMessage: `Username "${username}" is already taken by someone else in this room.`,
-        });
-        return;
+        };
       }
     }
 
     const connection = { username, isHost: false, room: roomName, socket };
+
     this.connections.set(socket.id, connection);
     room.connections.push(connection);
 
-    callback({
+    return {
       status: "ok",
-    });
-    return;
+    };
   }
 
   private onDisconnect(socket: Socket): void {
@@ -174,10 +170,12 @@ export class VNSyncServer {
       return;
     }
 
+    // Update room's connections.
     room.connections = room.connections.filter(
       (roomConnection) => roomConnection.username !== connection.username
     );
 
+    // Delete room and disconnect all users if host.
     if (connection.isHost) {
       for (const roomConnection of room.connections) {
         roomConnection.socket.disconnect();
@@ -189,7 +187,7 @@ export class VNSyncServer {
     this.connections.delete(socket.id);
   }
 
-  private isActive(socketId: string): boolean {
+  private isInARoom(socketId: string): boolean {
     return this.connections.has(socketId);
   }
 
