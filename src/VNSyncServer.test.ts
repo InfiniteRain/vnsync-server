@@ -11,6 +11,8 @@ describe("vnsync server", () => {
   let user: Socket;
 
   const log = getLogger("vnsync-tests");
+  const connectionString = "ws://localhost:8080";
+
   log.setLevel("silent");
 
   const promiseEmit = <T>(
@@ -26,7 +28,7 @@ describe("vnsync server", () => {
   };
 
   const getNewWsClient = (): Socket => {
-    const newClient = io("ws://localhost:8080");
+    const newClient = io(connectionString);
     wsClients.push(newClient);
     return newClient;
   };
@@ -792,7 +794,7 @@ describe("vnsync server", () => {
       const [advanceEventCounter, counterOf] = generateEventCounter(1);
       const waitFor1st = counterOf(1);
 
-      const socket = io("ws://localhost:8080", {
+      const socket = io(connectionString, {
         reconnection: false,
       });
       socket.on("connect_error", (error: Error) => {
