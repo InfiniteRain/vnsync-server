@@ -252,7 +252,7 @@ export class VNSyncServer {
     socket.join(roomName);
     this.emitRoomStateChange(roomName);
 
-    this.log.info(`User ${username}: created room ${roomName}`);
+    this.log.info(`Connection ${username}: created room ${roomName}`);
 
     return {
       status: "ok",
@@ -327,7 +327,7 @@ export class VNSyncServer {
     socket.join(roomName);
     this.emitRoomStateChange(roomName);
 
-    this.log.info(`User ${username}: joined room ${roomName}`);
+    this.log.info(`Connection ${username}: joined room ${roomName}`);
 
     return {
       status: "ok",
@@ -359,7 +359,7 @@ export class VNSyncServer {
     this.emitRoomStateChange(connection.roomName);
 
     this.log.info(
-      `User ${connection.roomName}/${connection.username}: toggled state`
+      `Connection ${connection.roomName}/${connection.username}: toggled state`
     );
 
     return {
@@ -405,7 +405,9 @@ export class VNSyncServer {
 
     this.connections.delete(socket.id);
 
-    this.log.info(`User ${connection.roomName}/${connection.username}: left`);
+    this.log.info(
+      `Connection ${connection.roomName}/${connection.username}: left`
+    );
   }
 
   /**
