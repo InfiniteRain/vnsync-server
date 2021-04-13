@@ -3,22 +3,26 @@ import { VNSyncServer } from "./VNSyncServer";
 import { EventResult } from "./interfaces/EventResult";
 import { Connection } from "./interfaces/Connection";
 import { cloneDeep } from "lodash";
-
-const promiseEmit = <T>(
-  socket: Socket,
-  eventName: string,
-  ...args: unknown[]
-): Promise<T> => {
-  return new Promise<T>((resolve) => {
-    socket.emit(eventName, ...args, (data: T) => {
-      resolve(data);
-    });
-  });
-};
+import { getLogger } from "loglevel";
 
 describe("vnsync server", () => {
   let wsServer: VNSyncServer;
   let wsClients: Socket[] = [];
+
+  const log = getLogger("vnsync-tests");
+  log.setLevel("silent");
+
+  const promiseEmit = <T>(
+    socket: Socket,
+    eventName: string,
+    ...args: unknown[]
+  ): Promise<T> => {
+    return new Promise<T>((resolve) => {
+      socket.emit(eventName, ...args, (data: T) => {
+        resolve(data);
+      });
+    });
+  };
 
   const getNewWsClient = (): Socket => {
     const newClient = io("ws://localhost:8080");
@@ -129,7 +133,7 @@ describe("vnsync server", () => {
   };
 
   beforeEach(() => {
-    wsServer = new VNSyncServer();
+    wsServer = new VNSyncServer(log);
     wsServer.start(8080, true);
     getNewWsClient();
   });
