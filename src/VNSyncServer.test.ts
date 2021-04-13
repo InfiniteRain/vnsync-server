@@ -8,6 +8,7 @@ import { getLogger } from "loglevel";
 describe("vnsync server", () => {
   let wsServer: VNSyncServer;
   let wsClients: Socket[] = [];
+  let user: Socket;
 
   const log = getLogger("vnsync-tests");
   log.setLevel("silent");
@@ -135,7 +136,7 @@ describe("vnsync server", () => {
   beforeEach(() => {
     wsServer = new VNSyncServer(log);
     wsServer.start(8080, true);
-    getNewWsClient();
+    user = getNewWsClient();
   });
 
   afterEach(() => {
@@ -148,17 +149,14 @@ describe("vnsync server", () => {
   });
 
   test("user connects to the server", (done) => {
-    wsClients[0].on("connect", () => {
+    user.on("connect", () => {
       done();
     });
   });
 
   describe("room tests", () => {
     test("user attempts to create a room with no username provided", async () => {
-      const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
-        "createRoom"
-      );
+      const result = await promiseEmit<EventResult<string>>(user, "createRoom");
 
       expect(result.status).toEqual("fail");
       expect(result.failMessage).toEqual(
@@ -166,7 +164,7 @@ describe("vnsync server", () => {
       );
 
       const result2 = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         ""
       );
@@ -182,7 +180,7 @@ describe("vnsync server", () => {
       expect(wsServer.connectionsSnapshot.size).toEqual(0);
 
       const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         "user"
       );
@@ -204,7 +202,7 @@ describe("vnsync server", () => {
 
     test("user attempts to create room two times", async () => {
       const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         "user"
       );
@@ -212,7 +210,7 @@ describe("vnsync server", () => {
       expect(result.status).toEqual("ok");
 
       const result2 = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         "user"
       );
@@ -224,7 +222,7 @@ describe("vnsync server", () => {
 
     test("user attempts to join a room when hosting", async () => {
       const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         "user"
       );
@@ -232,7 +230,7 @@ describe("vnsync server", () => {
       expect(result.status).toEqual("ok");
 
       const result2 = await promiseEmit<EventResult<undefined>>(
-        wsClients[0],
+        user,
         "joinRoom",
         "user",
         "someNonExistentRoom"
@@ -245,7 +243,7 @@ describe("vnsync server", () => {
 
     test("user attempts to join a room with bad params", async () => {
       const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         "user"
       );
@@ -301,7 +299,7 @@ describe("vnsync server", () => {
     test("user attempts to join a non-existent room", async () => {
       const roomName = "someNonExistentRoom";
       const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "joinRoom",
         "user",
         roomName
@@ -317,7 +315,7 @@ describe("vnsync server", () => {
       expect(wsServer.connectionsSnapshot.size).toEqual(0);
 
       const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         "user"
       );
@@ -355,7 +353,7 @@ describe("vnsync server", () => {
 
     test("user attempts to join a room with a username that's already taken", async () => {
       const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         "user"
       );
@@ -380,11 +378,7 @@ describe("vnsync server", () => {
       expect(wsServer.roomsSnapshot.size).toEqual(0);
       expect(wsServer.connectionsSnapshot.size).toEqual(0);
 
-      await promiseEmit<EventResult<string>>(
-        wsClients[0],
-        "createRoom",
-        "user"
-      );
+      await promiseEmit<EventResult<string>>(user, "createRoom", "user");
 
       expect(wsServer.roomsSnapshot.size).toEqual(1);
       expect(wsServer.connectionsSnapshot.size).toEqual(1);
@@ -398,7 +392,7 @@ describe("vnsync server", () => {
 
     test("room doesn't get deleted when a non-host user leaves", async () => {
       const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         "user"
       );
@@ -424,7 +418,7 @@ describe("vnsync server", () => {
       expect(wsServer.connectionsSnapshot.size).toEqual(0);
 
       const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         "user"
       );
@@ -447,7 +441,7 @@ describe("vnsync server", () => {
 
     test("room connections get updated properly", async () => {
       const result = await promiseEmit<EventResult<string>>(
-        wsClients[0],
+        user,
         "createRoom",
         "user"
       );
@@ -477,7 +471,7 @@ describe("vnsync server", () => {
 
   describe("ready logic tests", () => {
     test("user attempts to toggle the ready state while not in a room", async () => {
-      const result = await emitToggleReady(wsClients[0]);
+      const result = await emitToggleReady(user);
 
       expect(result.status).toEqual("fail");
       expect(result.failMessage).toEqual("This user is not yet in a room.");
@@ -493,12 +487,12 @@ describe("vnsync server", () => {
       const waitFor1st = counterOf(1);
       const waitFor3rd = counterOf(3);
 
-      wsClients[0].on("roomStateChange", (state) => {
+      user.on("roomStateChange", (state) => {
         expect(state).toEqual(expectedRoomState);
         advanceEventCounter();
       });
 
-      const roomName = await createRoom(wsClients[0]);
+      const roomName = await createRoom(user);
       await waitFor1st;
 
       expectedRoomState.push({
@@ -526,7 +520,7 @@ describe("vnsync server", () => {
     });
 
     test("users receive a state update once another user from the same room leaves", async () => {
-      const roomName = await createRoom(wsClients[0]);
+      const roomName = await createRoom(user);
       const user2 = await addNewUserToARoom("user2", roomName);
       const user3 = await addNewUserToARoom("user3", roomName);
 
@@ -538,7 +532,7 @@ describe("vnsync server", () => {
         { username: "user3", isHost: false, isReady: false },
       ];
 
-      wsClients[0].on("roomStateChange", (state) => {
+      user.on("roomStateChange", (state) => {
         expect(state).toEqual(cloneDeep(expectedRoomState));
         advanceEventCounter();
       });
@@ -554,7 +548,7 @@ describe("vnsync server", () => {
     });
 
     test("users can toggle ready status and everyone receives a state update", async () => {
-      const roomName = await createRoom(wsClients[0]);
+      const roomName = await createRoom(user);
       const user2 = await addNewUserToARoom("user2", roomName);
       const user3 = await addNewUserToARoom("user3", roomName);
 
@@ -569,7 +563,7 @@ describe("vnsync server", () => {
         { username: "user3", isHost: false, isReady: false },
       ];
 
-      wsClients[0].on("roomStateChange", (state) => {
+      user.on("roomStateChange", (state) => {
         expect(state).toEqual(cloneDeep(expectedRoomState));
         advanceEventCounter();
       });
@@ -584,7 +578,7 @@ describe("vnsync server", () => {
         advanceEventCounter();
       });
 
-      const result = await emitToggleReady(wsClients[0]);
+      const result = await emitToggleReady(user);
       expect(result.status).toEqual("ok");
 
       await waitFor3rd;
@@ -596,14 +590,14 @@ describe("vnsync server", () => {
       await waitFor6th;
 
       expectedRoomState[0].isReady = false;
-      const result3 = await emitToggleReady(wsClients[0]);
+      const result3 = await emitToggleReady(user);
       expect(result3.status).toEqual("ok");
 
       await waitFor9th;
     });
 
     test("ready status resets once everyone is ready and an event is emited to host", async () => {
-      const roomName = await createRoom(wsClients[0]);
+      const roomName = await createRoom(user);
       const user2 = await addNewUserToARoom("user2", roomName);
       const user3 = await addNewUserToARoom("user3", roomName);
 
@@ -623,12 +617,12 @@ describe("vnsync server", () => {
         { username: "user3", isHost: false, isReady: false },
       ];
 
-      wsClients[0].on("roomStateChange", (state) => {
+      user.on("roomStateChange", (state) => {
         expect(state).toEqual(cloneDeep(expectedRoomState));
         advanceEventCounter();
       });
 
-      wsClients[0].on("roomReady", () => {
+      user.on("roomReady", () => {
         advanceReadyEventCounter();
       });
 
@@ -642,7 +636,7 @@ describe("vnsync server", () => {
         advanceEventCounter();
       });
 
-      await emitToggleReady(wsClients[0]);
+      await emitToggleReady(user);
       await waitFor3rd;
 
       expectedRoomState[1].isReady = true;
@@ -657,7 +651,7 @@ describe("vnsync server", () => {
     });
 
     test("ready status resets once the only user that is in a non-ready status disconnects", async () => {
-      const roomName = await createRoom(wsClients[0]);
+      const roomName = await createRoom(user);
       const user2 = await addNewUserToARoom("user2", roomName);
       const user3 = await addNewUserToARoom("user3", roomName);
 
@@ -677,12 +671,12 @@ describe("vnsync server", () => {
         { username: "user3", isHost: false, isReady: false },
       ];
 
-      wsClients[0].on("roomStateChange", (state) => {
+      user.on("roomStateChange", (state) => {
         expect(state).toEqual(cloneDeep(expectedRoomState));
         advanceEventCounter();
       });
 
-      wsClients[0].on("roomReady", () => {
+      user.on("roomReady", () => {
         advanceReadyEventCounter();
       });
 
@@ -691,7 +685,7 @@ describe("vnsync server", () => {
         advanceEventCounter();
       });
 
-      await emitToggleReady(wsClients[0]);
+      await emitToggleReady(user);
       await waitFor2nd;
 
       expectedRoomState[2].isReady = true;
@@ -708,7 +702,7 @@ describe("vnsync server", () => {
     });
 
     test("ready status resets properly when the host is alone", async () => {
-      await createRoom(wsClients[0]);
+      await createRoom(user);
 
       const [advanceEventCounter, counterOf] = generateEventCounter(2);
       const waitFor1st = counterOf(1);
@@ -724,20 +718,20 @@ describe("vnsync server", () => {
         { username: "user", isHost: true, isReady: false },
       ];
 
-      wsClients[0].on("roomStateChange", (state) => {
+      user.on("roomStateChange", (state) => {
         expect(state).toEqual(cloneDeep(expectedRoomState));
         advanceEventCounter();
       });
 
-      wsClients[0].on("roomReady", () => {
+      user.on("roomReady", () => {
         advanceReadyEventCounter();
       });
 
-      await emitToggleReady(wsClients[0]);
+      await emitToggleReady(user);
       await waitFor1st;
       await waitFor1stReady;
 
-      await emitToggleReady(wsClients[0]);
+      await emitToggleReady(user);
       await waitFor2nd;
       await waitFor2ndReady;
     });
@@ -747,7 +741,7 @@ describe("vnsync server", () => {
     test("addresses map gets updated properly", async () => {
       expect(wsServer.addressesSnapshot.size).toEqual(0);
 
-      const roomName = await createRoom(wsClients[0]);
+      const roomName = await createRoom(user);
 
       expect(wsServer.addressesSnapshot.size).toEqual(1);
 
@@ -773,14 +767,14 @@ describe("vnsync server", () => {
 
       expect(wsServer.addressesSnapshot.get(address)).toEqual(1);
 
-      wsClients[0].disconnect();
+      user.disconnect();
       await wsServer.awaitForDisconnect();
 
       expect(wsServer.addressesSnapshot.size).toEqual(0);
     });
 
     test("address connection limit works properly", async () => {
-      const roomName = await createRoom(wsClients[0]);
+      const roomName = await createRoom(user);
       const user2 = await addNewUserToARoom("user2", roomName);
       await addNewUserToARoom("user3", roomName);
       await addNewUserToARoom("user4", roomName);
@@ -822,7 +816,7 @@ describe("vnsync server", () => {
 
       expect(wsServer.addressesSnapshot.get(address)).toEqual(5);
 
-      wsClients[0].disconnect();
+      user.disconnect();
       await wsServer.awaitForDisconnect();
 
       expect(wsServer.addressesSnapshot.size).toEqual(0);
