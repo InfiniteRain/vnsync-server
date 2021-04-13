@@ -742,4 +742,90 @@ describe("vnsync server", () => {
       await waitFor2ndReady;
     });
   });
+
+  describe("connection limit tests", () => {
+    test("addresses map gets updated properly", async () => {
+      expect(wsServer.addressesSnapshot.size).toEqual(0);
+
+      const roomName = await createRoom(wsClients[0]);
+
+      expect(wsServer.addressesSnapshot.size).toEqual(1);
+
+      const address = findUsernameInConnections(
+        "user",
+        wsServer.connectionsSnapshot
+      ).socket.handshake.address;
+
+      expect(wsServer.addressesSnapshot.get(address)).toEqual(1);
+
+      const user2 = await addNewUserToARoom("user2", roomName);
+
+      expect(wsServer.addressesSnapshot.get(address)).toEqual(2);
+
+      const user3 = await addNewUserToARoom("user3", roomName);
+
+      expect(wsServer.addressesSnapshot.get(address)).toEqual(3);
+
+      user2.disconnect();
+      await wsServer.awaitForDisconnect();
+      user3.disconnect();
+      await wsServer.awaitForDisconnect();
+
+      expect(wsServer.addressesSnapshot.get(address)).toEqual(1);
+
+      wsClients[0].disconnect();
+      await wsServer.awaitForDisconnect();
+
+      expect(wsServer.addressesSnapshot.size).toEqual(0);
+    });
+
+    test("address connection limit works properly", async () => {
+      const roomName = await createRoom(wsClients[0]);
+      const user2 = await addNewUserToARoom("user2", roomName);
+      await addNewUserToARoom("user3", roomName);
+      await addNewUserToARoom("user4", roomName);
+      await addNewUserToARoom("user5", roomName);
+
+      expect(wsServer.addressesSnapshot.size).toEqual(1);
+
+      const address = findUsernameInConnections(
+        "user",
+        wsServer.connectionsSnapshot
+      ).socket.handshake.address;
+
+      expect(wsServer.addressesSnapshot.get(address)).toEqual(5);
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(1);
+      const waitFor1st = counterOf(1);
+
+      const socket = io("ws://localhost:8080", {
+        reconnection: false,
+      });
+      socket.on("connect_error", (error: Error) => {
+        expect(error.message).toEqual(
+          "Too many connections from the same address."
+        );
+
+        advanceEventCounter();
+
+        socket.close();
+      });
+
+      await waitFor1st;
+
+      user2.disconnect();
+      await wsServer.awaitForDisconnect();
+
+      expect(wsServer.addressesSnapshot.get(address)).toEqual(4);
+
+      await addNewUserToARoom("user6", roomName);
+
+      expect(wsServer.addressesSnapshot.get(address)).toEqual(5);
+
+      wsClients[0].disconnect();
+      await wsServer.awaitForDisconnect();
+
+      expect(wsServer.addressesSnapshot.size).toEqual(0);
+    });
+  });
 });

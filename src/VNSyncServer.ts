@@ -8,6 +8,16 @@ import { Room } from "./interfaces/Room";
 import { cloneDeep } from "lodash";
 import { Logger } from "loglevel";
 
+export interface Configuration {
+  maxConnectionsFromSingleSource: number;
+}
+
+const defaultConfiguration: Configuration = {
+  maxConnectionsFromSingleSource: Number.parseInt(
+    process.env.MAX_CONNECTIONS_FROM_SINGLE_SOURCE || "5"
+  ),
+};
+
 export class VNSyncServer {
   private readonly expressApp = express();
   private readonly httpServer: HTTPServer;
@@ -16,9 +26,14 @@ export class VNSyncServer {
   private readonly connections: Map<string, Connection> = new Map();
   private readonly rooms: Map<string, Room> = new Map();
 
+  private readonly addresses: Map<string, number> = new Map();
+
   private disconnectResolve: (() => void) | null = null;
 
-  public constructor(private log: Logger) {
+  public constructor(
+    private log: Logger,
+    private configuration: Configuration = defaultConfiguration
+  ) {
     // todo: remove / refactor this
     this.expressApp.get(/^(?!\/pensive.svg$).*/, (_, res) => {
       res.sendFile(path.join(__dirname + "/../assets/index.html"));
@@ -57,6 +72,10 @@ export class VNSyncServer {
     return cloneDeep(this.rooms);
   }
 
+  public get addressesSnapshot(): Map<string, number> {
+    return cloneDeep(this.addresses);
+  }
+
   public awaitForDisconnect(): Promise<void> {
     return new Promise((resolve) => {
       this.disconnectResolve = resolve;
@@ -66,47 +85,65 @@ export class VNSyncServer {
   private initServer(): void {
     this.log.info("Initializing the server...");
 
-    this.wsServer.on("connection", (socket) => {
-      this.log.info(`Socket ${socket.id}: connected`);
-
-      socket.on("createRoom", (...args: unknown[]) => {
-        const callback = args.pop() as (result: EventResult<string>) => void;
-        const result = this.onCreateRoom(socket, ...args);
-
-        this.log.info(`Event createRoom emitted by ${socket.id}:`, result);
-
-        callback(result);
-      });
-
-      socket.on("joinRoom", (...args: unknown[]) => {
-        const callback = args.pop() as (result: EventResult<undefined>) => void;
-        const result = this.onJoinRoom(socket, ...args);
-
-        this.log.info(`Event joinRoom emitted by ${socket.id}:`, result);
-
-        callback(result);
-      });
-
-      socket.on("toggleReady", (...args: unknown[]) => {
-        const callback = args.pop() as (result: EventResult<undefined>) => void;
-        const result = this.onToggleReady(socket);
-
-        this.log.info(`Event toggleReady emitted by ${socket.id}:`, result);
-
-        callback(result);
-      });
-
-      socket.on("disconnect", () => {
-        this.log.info(`Socket ${socket.id}: disconnected`);
-
-        this.onDisconnect(socket);
-
-        if (this.disconnectResolve !== null) {
-          this.disconnectResolve();
-          this.disconnectResolve = null;
+    this.wsServer
+      .use((socket, next) => {
+        if (this.isAddressBlocked(socket.handshake.address)) {
+          next(new Error("Too many connections from the same address."));
+          return;
         }
+
+        next();
+      })
+      .on("connection", (socket) => {
+        this.log.info(`Socket ${socket.id}: connecting...`);
+
+        this.addAddress(socket.handshake.address);
+
+        socket.on("createRoom", (...args: unknown[]) => {
+          const callback = args.pop() as (result: EventResult<string>) => void;
+          const result = this.onCreateRoom(socket, ...args);
+
+          this.log.info(`Event createRoom emitted by ${socket.id}:`, result);
+
+          callback(result);
+        });
+
+        socket.on("joinRoom", (...args: unknown[]) => {
+          const callback = args.pop() as (
+            result: EventResult<undefined>
+          ) => void;
+          const result = this.onJoinRoom(socket, ...args);
+
+          this.log.info(`Event joinRoom emitted by ${socket.id}:`, result);
+
+          callback(result);
+        });
+
+        socket.on("toggleReady", (...args: unknown[]) => {
+          const callback = args.pop() as (
+            result: EventResult<undefined>
+          ) => void;
+          const result = this.onToggleReady(socket);
+
+          this.log.info(`Event toggleReady emitted by ${socket.id}:`, result);
+
+          callback(result);
+        });
+
+        socket.on("disconnect", () => {
+          this.log.info(`Socket ${socket.id}: disconnected`);
+
+          this.onDisconnect(socket);
+          this.removeAddress(socket.handshake.address);
+
+          if (this.disconnectResolve !== null) {
+            this.disconnectResolve();
+            this.disconnectResolve = null;
+          }
+        });
+
+        this.log.info(`Socket ${socket.id}: connected`);
       });
-    });
   }
 
   private onCreateRoom(
@@ -278,6 +315,44 @@ export class VNSyncServer {
     this.connections.delete(socket.id);
 
     this.log.info(`User ${connection.room}/${connection.username}: left`);
+  }
+
+  private isAddressBlocked(address: string): boolean {
+    const count = this.addresses.get(address);
+
+    if (count === undefined) {
+      return false;
+    }
+
+    return count >= this.configuration.maxConnectionsFromSingleSource;
+  }
+
+  private addAddress(address: string): void {
+    const count = this.addresses.get(address);
+
+    if (count === undefined) {
+      this.addresses.set(address, 1);
+
+      return;
+    }
+
+    this.addresses.set(address, count + 1);
+  }
+
+  private removeAddress(address: string): void {
+    const count = this.addresses.get(address);
+
+    if (count === undefined) {
+      throw new Error("The address is not present in the addresses map.");
+    }
+
+    if (count - 1 <= 0) {
+      this.addresses.delete(address);
+
+      return;
+    }
+
+    this.addresses.set(address, count - 1);
   }
 
   private emitStateChange(roomName: string) {
