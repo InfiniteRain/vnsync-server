@@ -135,7 +135,7 @@ describe("vnsync server", () => {
 
   beforeEach(() => {
     wsServer = new VNSyncServer(log);
-    wsServer.start(8080, true);
+    wsServer.start(8080);
     user = getNewWsClient();
   });
 

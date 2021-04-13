@@ -7,29 +7,66 @@ import { EventResult } from "./interfaces/EventResult";
 import { Room } from "./interfaces/Room";
 import { cloneDeep } from "lodash";
 import { Logger } from "loglevel";
+import { Configuration } from "./interfaces/Configuration";
 
-export interface Configuration {
-  maxConnectionsFromSingleSource: number;
-}
-
+/**
+ * Default configuration.
+ */
 const defaultConfiguration: Configuration = {
   maxConnectionsFromSingleSource: Number.parseInt(
     process.env.MAX_CONNECTIONS_FROM_SINGLE_SOURCE || "5"
   ),
 };
 
+/**
+ * VNSyncServer class.
+ *
+ * Represents a VNSync server.
+ */
 export class VNSyncServer {
+  /**
+   * Express instance.
+   */
   private readonly expressApp = express();
+
+  /**
+   * HTTP server instance.
+   */
   private readonly httpServer: HTTPServer;
+
+  /**
+   * Socket.io server instance.
+   */
   private readonly wsServer: Server;
 
+  /**
+   * Current connections.
+   */
   private readonly connections: Map<string, Connection> = new Map();
+
+  /**
+   * Current rooms.
+   */
   private readonly rooms: Map<string, Room> = new Map();
 
+  /**
+   * This map represents the amount of connections made from a single ip
+   * address.
+   */
   private readonly addresses: Map<string, number> = new Map();
 
+  /**
+   * A resolve function for a disconnect promise.
+   * Used only for tests.
+   */
   private disconnectResolve: (() => void) | null = null;
 
+  /**
+   * Constructor.
+   *
+   * @param log A loglevel object.
+   * @param configuration Configuration object for the server.
+   */
   public constructor(
     private log: Logger,
     private configuration: Configuration = defaultConfiguration
@@ -49,14 +86,20 @@ export class VNSyncServer {
     this.initServer();
   }
 
-  public start(port: number, silent = false): void {
-    if (!silent) {
-      this.log.info(`The server is running on port ${port}...`);
-    }
+  /**
+   * Starts the WebSocket server.
+   *
+   * @param port The port to listen to.
+   */
+  public start(port: number): void {
+    this.log.info(`The server is running on port ${port}...`);
 
     this.httpServer.listen(port);
   }
 
+  /**
+   * Closes the server.
+   */
   public close(): void {
     this.log.info("Closing the server...");
 
@@ -64,24 +107,46 @@ export class VNSyncServer {
     this.httpServer.close();
   }
 
+  /**
+   * Gets a snapshot of current connections, deeply cloned.
+   * Used only for tests.
+   */
   public get connectionsSnapshot(): Map<string, Connection> {
     return cloneDeep(this.connections);
   }
 
+  /**
+   * Gets a snapshot of current rooms, deeply cloned.
+   * Used only for tests.
+   */
   public get roomsSnapshot(): Map<string, Room> {
     return cloneDeep(this.rooms);
   }
 
+  /**
+   * Gets a snapshot of current addresses, deeply cloned.
+   * Used only for tests.
+   */
   public get addressesSnapshot(): Map<string, number> {
     return cloneDeep(this.addresses);
   }
 
+  /**
+   * Returns a promise that resolves once the next disconnection event cycle
+   * completes.
+   * Used only for tests.
+   *
+   * @returns The disconnection promise.
+   */
   public awaitForDisconnect(): Promise<void> {
     return new Promise((resolve) => {
       this.disconnectResolve = resolve;
     });
   }
 
+  /**
+   * Initializes the WebSocket server.
+   */
   private initServer(): void {
     this.log.info("Initializing the server...");
 
@@ -146,6 +211,13 @@ export class VNSyncServer {
       });
   }
 
+  /**
+   * Method that gets triggered on "createRoom" event.
+   *
+   * @param socket The socket that triggered the event.
+   * @param args Arguments passed to the event.
+   * @returns The event result.
+   */
   private onCreateRoom(
     socket: Socket,
     ...args: unknown[]
@@ -170,7 +242,7 @@ export class VNSyncServer {
     const connection = {
       username,
       isHost: true,
-      room: roomName,
+      roomName,
       socket,
       isReady: false,
     };
@@ -178,7 +250,7 @@ export class VNSyncServer {
     this.connections.set(socket.id, connection);
     this.rooms.set(roomName, { connections: [connection], host: connection });
     socket.join(roomName);
-    this.emitStateChange(roomName);
+    this.emitRoomStateChange(roomName);
 
     this.log.info(`User ${username}: created room ${roomName}`);
 
@@ -188,6 +260,13 @@ export class VNSyncServer {
     };
   }
 
+  /**
+   * Method that gets triggered on "joinRoom" event.
+   *
+   * @param socket The socket that triggered the event.
+   * @param args Arguments passed to the event.
+   * @returns The event result.
+   */
   private onJoinRoom(
     socket: Socket,
     ...args: unknown[]
@@ -238,7 +317,7 @@ export class VNSyncServer {
     const connection = {
       username,
       isHost: false,
-      room: roomName,
+      roomName,
       socket,
       isReady: false,
     };
@@ -246,7 +325,7 @@ export class VNSyncServer {
     this.connections.set(socket.id, connection);
     room.connections.push(connection);
     socket.join(roomName);
-    this.emitStateChange(roomName);
+    this.emitRoomStateChange(roomName);
 
     this.log.info(`User ${username}: joined room ${roomName}`);
 
@@ -255,6 +334,12 @@ export class VNSyncServer {
     };
   }
 
+  /**
+   * Method that gets triggered on "toggleReady" event.
+   *
+   * @param socket The socket that triggered the event.
+   * @returns The event result.
+   */
   private onToggleReady(socket: Socket): EventResult<undefined> {
     if (!this.isInARoom(socket.id)) {
       return {
@@ -270,11 +355,11 @@ export class VNSyncServer {
     }
 
     connection.isReady = !connection.isReady;
-    this.entireRoomReadyCheck(connection.room);
-    this.emitStateChange(connection.room);
+    this.entireRoomReadyCheck(connection.roomName);
+    this.emitRoomStateChange(connection.roomName);
 
     this.log.info(
-      `User ${connection.room}/${connection.username}: toggled state`
+      `User ${connection.roomName}/${connection.username}: toggled state`
     );
 
     return {
@@ -282,9 +367,15 @@ export class VNSyncServer {
     };
   }
 
+  /**
+   * Method that gets triggered on "disconnect" event.
+   *
+   * @param socket The socket that triggered the event.
+   * @returns The event result.
+   */
   private onDisconnect(socket: Socket): void {
     const connection = this.connections.get(socket.id);
-    const room = this.rooms.get(connection?.room || "");
+    const room = this.rooms.get(connection?.roomName || "");
 
     if (connection === undefined || room === undefined) {
       return;
@@ -301,22 +392,29 @@ export class VNSyncServer {
         roomConnection.socket.disconnect();
       }
 
-      this.rooms.delete(connection.room);
+      this.rooms.delete(connection.roomName);
 
-      this.log.info(`Room ${connection.room}: deleted`);
+      this.log.info(`Room ${connection.roomName}: deleted`);
     }
 
     // Emit a state change event if not host.
     if (!connection.isHost) {
-      this.entireRoomReadyCheck(connection.room);
-      this.emitStateChange(connection.room);
+      this.entireRoomReadyCheck(connection.roomName);
+      this.emitRoomStateChange(connection.roomName);
     }
 
     this.connections.delete(socket.id);
 
-    this.log.info(`User ${connection.room}/${connection.username}: left`);
+    this.log.info(`User ${connection.roomName}/${connection.username}: left`);
   }
 
+  /**
+   * Checks if the address is blocked. The adress is considered blocked when
+   * there are too many connections from it.
+   *
+   * @param address The address in question.
+   * @returns A boolean depending on whether the address is blocked or not.
+   */
   private isAddressBlocked(address: string): boolean {
     const count = this.addresses.get(address);
 
@@ -327,6 +425,11 @@ export class VNSyncServer {
     return count >= this.configuration.maxConnectionsFromSingleSource;
   }
 
+  /**
+   * Adds an address to the addresses map.
+   *
+   * @param address The address to add.
+   */
   private addAddress(address: string): void {
     const count = this.addresses.get(address);
 
@@ -339,6 +442,11 @@ export class VNSyncServer {
     this.addresses.set(address, count + 1);
   }
 
+  /**
+   * Removes an address from the addresses map.
+   *
+   * @param address The address to remove.
+   */
   private removeAddress(address: string): void {
     const count = this.addresses.get(address);
 
@@ -355,7 +463,12 @@ export class VNSyncServer {
     this.addresses.set(address, count - 1);
   }
 
-  private emitStateChange(roomName: string) {
+  /**
+   * Emits a "roomStateChange" event.
+   *
+   * @param roomName The name of the room to emit the update to.
+   */
+  private emitRoomStateChange(roomName: string): void {
     const room = this.rooms.get(roomName);
 
     if (!room) {
@@ -373,6 +486,12 @@ export class VNSyncServer {
     this.log.info(`Room ${roomName}: state changed`, state);
   }
 
+  /**
+   * Checks if the entire room is ready. If it is, resets the ready state of
+   * everyone in the room and emits a "roomReady" event to the host.
+   *
+   * @param roomName The name of the room to check.
+   */
   private entireRoomReadyCheck(roomName: string): void {
     const room = this.rooms.get(roomName);
 
@@ -402,10 +521,22 @@ export class VNSyncServer {
     this.log.info(`Room ${roomName}: emitted room ready to host`);
   }
 
+  /**
+   * Checks if a connection is a part of a room.
+   *
+   * @param socketId The socket id of the connection in question.
+   * @returns A boolean depending on whether the connection is in a room or
+   * not.
+   */
   private isInARoom(socketId: string): boolean {
     return this.connections.has(socketId);
   }
 
+  /**
+   * Generates a unique name for a room.
+   *
+   * @returns The generated name string.
+   */
   private generateRoomName(): string {
     let roomName;
 
