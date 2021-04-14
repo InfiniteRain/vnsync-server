@@ -81,7 +81,11 @@ export class VNSyncServer {
     });
 
     this.httpServer = createServer(this.expressApp);
-    this.wsServer = new Server(this.httpServer);
+    this.wsServer = new Server(this.httpServer, {
+      cors: {
+        origin: "*",
+      },
+    });
 
     this.initServer();
   }
