@@ -274,7 +274,8 @@ export class VNSyncServer {
    * Method that gets triggered on "createRoom" event.
    *
    * @param socket The socket that triggered the event.
-   * @param args Arguments passed to the event.
+   * @param connection The connection of the socket that triggered the event.
+   * @param username The username.
    * @returns The event result.
    */
   private onCreateRoom(
@@ -308,7 +309,9 @@ export class VNSyncServer {
    * Method that gets triggered on "joinRoom" event.
    *
    * @param socket The socket that triggered the event.
-   * @param args Arguments passed to the event.
+   * @param connection The connection of the socket that triggered the event.
+   * @param username The username.
+   * @param roomName The room name.
    * @returns The event result.
    */
   private onJoinRoom(
@@ -354,6 +357,7 @@ export class VNSyncServer {
    * Method that gets triggered on "toggleReady" event.
    *
    * @param socket The socket that triggered the event.
+   * @param room The room that the event got triggered for.
    * @returns The event result.
    */
   private onToggleReady(
@@ -472,7 +476,7 @@ export class VNSyncServer {
   /**
    * Emits a "roomStateChange" event.
    *
-   * @param roomName The name of the room to emit the update to.
+   * @param room The room to emit the update to.
    */
   private emitRoomStateChange(room: Room): void {
     const state = room.connections.map((roomConnection) => ({
@@ -490,7 +494,7 @@ export class VNSyncServer {
    * Checks if the entire room is ready. If it is, resets the ready state of
    * everyone in the room and emits a "roomReady" event to the host.
    *
-   * @param roomName The name of the room to check.
+   * @param room The room to check.
    */
   private entireRoomReadyCheck(room: Room): void {
     if (room.connections.length === 0) {
@@ -524,7 +528,7 @@ export class VNSyncServer {
   /**
    * Validates the room presence of a connection.
    *
-   * @param socketId The socket id of the connection in question.
+   * @param connection The connection in question.
    * @param expected Expected presence. True for connection being present in a
    * room, and false for not.
    * @returns A boolean depending on whether the connection is in a room or
