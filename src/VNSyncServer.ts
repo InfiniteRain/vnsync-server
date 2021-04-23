@@ -172,13 +172,14 @@ export class VNSyncServer {
         socket.on("createRoom", (...args: unknown[]) => {
           const callback = args.pop() as (result: EventResult<string>) => void;
           const username = args[0] as string;
-          const argumentError = validateEventArguments<string>(
-            [nonEmptyString("Username")],
-            [username]
-          );
+          const validationError =
+            validateEventArguments<string>(
+              [nonEmptyString("Username")],
+              [username]
+            ) || this.validateRoomPresence<string>(socket.id, false);
 
-          if (argumentError) {
-            callback(argumentError);
+          if (validationError) {
+            callback(validationError);
             return;
           }
 
@@ -195,13 +196,14 @@ export class VNSyncServer {
           ) => void;
           const username = args[0] as string;
           const roomName = args[1] as string;
-          const argumentError = validateEventArguments(
-            [nonEmptyString("Username"), nonEmptyString("Room name")],
-            [username, roomName]
-          );
+          const validationError =
+            validateEventArguments(
+              [nonEmptyString("Username"), nonEmptyString("Room name")],
+              [username, roomName]
+            ) || this.validateRoomPresence(socket.id, false);
 
-          if (argumentError) {
-            callback(argumentError);
+          if (validationError) {
+            callback(validationError);
             return;
           }
 
@@ -216,6 +218,13 @@ export class VNSyncServer {
           const callback = args.pop() as (
             result: EventResult<undefined>
           ) => void;
+          const validationError = this.validateRoomPresence(socket.id, true);
+
+          if (validationError) {
+            callback(validationError);
+            return;
+          }
+
           const result = this.onToggleReady(socket);
 
           this.log.info(`Event toggleReady emitted by ${socket.id}:`, result);
@@ -247,13 +256,6 @@ export class VNSyncServer {
    * @returns The event result.
    */
   private onCreateRoom(socket: Socket, username: string): EventResult<string> {
-    if (this.isInARoom(socket.id)) {
-      return {
-        status: "fail",
-        failMessage: "This user is already in a room.",
-      };
-    }
-
     const roomName = this.generateRoomName();
     const room: Room = {
       name: roomName,
@@ -294,13 +296,6 @@ export class VNSyncServer {
     username: string,
     roomName: string
   ): EventResult<undefined> {
-    if (this.isInARoom(socket.id)) {
-      return {
-        status: "fail",
-        failMessage: "This user is already in a room.",
-      };
-    }
-
     const room = this.rooms.get(roomName);
 
     if (!room) {
@@ -346,13 +341,6 @@ export class VNSyncServer {
    * @returns The event result.
    */
   private onToggleReady(socket: Socket): EventResult<undefined> {
-    if (!this.isInARoom(socket.id)) {
-      return {
-        status: "fail",
-        failMessage: "This user is not yet in a room.",
-      };
-    }
-
     const connection = this.connections.get(socket.id);
 
     if (!connection) {
@@ -524,14 +512,28 @@ export class VNSyncServer {
   }
 
   /**
-   * Checks if a connection is a part of a room.
+   * Validates the room presence of a connection.
    *
    * @param socketId The socket id of the connection in question.
+   * @param expected Expected presence. True for connection being present in a
+   * room, and false for not.
    * @returns A boolean depending on whether the connection is in a room or
    * not.
    */
-  private isInARoom(socketId: string): boolean {
-    return this.connections.has(socketId);
+  private validateRoomPresence<T = undefined>(
+    socketId: string,
+    expected: boolean
+  ): EventResult<T> | null {
+    if (this.connections.has(socketId) === expected) {
+      return null;
+    }
+
+    return {
+      status: "fail",
+      failMessage: expected
+        ? "This user is not yet in a room."
+        : "This user is already in a room.",
+    };
   }
 
   /**
