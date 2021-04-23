@@ -27,10 +27,14 @@ describe("vnsync server", () => {
     });
   };
 
-  const getNewWsClient = (): Socket => {
+  const getNewWsClient = async (): Promise<Socket> => {
     const newClient = io(connectionString);
-    wsClients.push(newClient);
-    return newClient;
+    return new Promise((resolve) => {
+      newClient.on("connect", () => {
+        wsClients.push(newClient);
+        resolve(newClient);
+      });
+    });
   };
 
   const closeWsSocket = (index: number): void => {
@@ -67,7 +71,7 @@ describe("vnsync server", () => {
       );
     }
 
-    const newUser = getNewWsClient();
+    const newUser = await getNewWsClient();
     const result = await promiseEmit<EventResult<undefined>>(
       newUser,
       "joinRoom",
@@ -135,10 +139,10 @@ describe("vnsync server", () => {
     return [advanceEventCounter, counterOf];
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     wsServer = new VNSyncServer(log);
     wsServer.start(8080);
-    user = getNewWsClient();
+    user = await getNewWsClient();
   });
 
   afterEach(() => {
@@ -148,12 +152,6 @@ describe("vnsync server", () => {
 
     wsClients = [];
     wsServer.close();
-  });
-
-  test("user connects to the server", (done) => {
-    user.on("connect", () => {
-      done();
-    });
   });
 
   describe("room tests", () => {
@@ -179,7 +177,7 @@ describe("vnsync server", () => {
 
     test("user creates a room", async () => {
       expect(wsServer.roomsSnapshot.size).toEqual(0);
-      expect(wsServer.connectionsSnapshot.size).toEqual(0);
+      expect(wsServer.connectionsSnapshot.size).toEqual(1);
 
       const result = await promiseEmit<EventResult<string>>(
         user,
@@ -252,7 +250,7 @@ describe("vnsync server", () => {
 
       expect(result.status).toEqual("ok");
 
-      const newUser = getNewWsClient();
+      const newUser = await getNewWsClient();
       const result2 = await promiseEmit<EventResult<undefined>>(
         newUser,
         "joinRoom"
@@ -314,7 +312,7 @@ describe("vnsync server", () => {
 
     test("user joins a room", async () => {
       expect(wsServer.roomsSnapshot.size).toEqual(0);
-      expect(wsServer.connectionsSnapshot.size).toEqual(0);
+      expect(wsServer.connectionsSnapshot.size).toEqual(1);
 
       const result = await promiseEmit<EventResult<string>>(
         user,
@@ -333,7 +331,7 @@ describe("vnsync server", () => {
 
       expect(userSnapshot.username).toEqual("user");
 
-      const newUser = getNewWsClient();
+      const newUser = await getNewWsClient();
       const result2 = await promiseEmit<EventResult<undefined>>(
         newUser,
         "joinRoom",
@@ -362,7 +360,7 @@ describe("vnsync server", () => {
 
       expect(result.status).toEqual("ok");
 
-      const newUser = getNewWsClient();
+      const newUser = await getNewWsClient();
       const result2 = await promiseEmit<EventResult<undefined>>(
         newUser,
         "joinRoom",
@@ -378,7 +376,7 @@ describe("vnsync server", () => {
 
     test("room gets deleted when the host leaves", async () => {
       expect(wsServer.roomsSnapshot.size).toEqual(0);
-      expect(wsServer.connectionsSnapshot.size).toEqual(0);
+      expect(wsServer.connectionsSnapshot.size).toEqual(1);
 
       await promiseEmit<EventResult<string>>(user, "createRoom", "user");
 
@@ -417,7 +415,7 @@ describe("vnsync server", () => {
 
     test("room users get disconnected when the host leaves", async () => {
       expect(wsServer.roomsSnapshot.size).toEqual(0);
-      expect(wsServer.connectionsSnapshot.size).toEqual(0);
+      expect(wsServer.connectionsSnapshot.size).toEqual(1);
 
       const result = await promiseEmit<EventResult<string>>(
         user,
@@ -503,7 +501,7 @@ describe("vnsync server", () => {
         isReady: false,
       });
 
-      const newUser = getNewWsClient();
+      const newUser = await getNewWsClient();
       newUser.on("roomStateChange", (state) => {
         expect(state).toEqual(expectedRoomState);
         advanceEventCounter();
@@ -741,7 +739,7 @@ describe("vnsync server", () => {
 
   describe("connection limit tests", () => {
     test("addresses map gets updated properly", async () => {
-      expect(wsServer.addressesSnapshot.size).toEqual(0);
+      expect(wsServer.addressesSnapshot.size).toEqual(1);
 
       const roomName = await createRoom(user);
 

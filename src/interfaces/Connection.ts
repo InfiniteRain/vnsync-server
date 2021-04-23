@@ -23,7 +23,7 @@ export interface Connection {
   /**
    * The room that the connection belongs to.
    */
-  room: Room;
+  room: Room | null;
 
   /**
    * A boolean which dentoes the ready state of the connection.
