@@ -8,6 +8,7 @@ import { Room } from "./interfaces/Room";
 import { cloneDeep } from "lodash";
 import { Logger } from "loglevel";
 import { Configuration } from "./interfaces/Configuration";
+import { nonEmptyString, validateEventArguments } from "./eventValidator";
 
 /**
  * Default configuration.
@@ -170,7 +171,18 @@ export class VNSyncServer {
 
         socket.on("createRoom", (...args: unknown[]) => {
           const callback = args.pop() as (result: EventResult<string>) => void;
-          const result = this.onCreateRoom(socket, ...args);
+          const username = args[0] as string;
+          const argumentError = validateEventArguments<string>(
+            [nonEmptyString("Username")],
+            [username]
+          );
+
+          if (argumentError) {
+            callback(argumentError);
+            return;
+          }
+
+          const result = this.onCreateRoom(socket, username);
 
           this.log.info(`Event createRoom emitted by ${socket.id}:`, result);
 
@@ -181,7 +193,19 @@ export class VNSyncServer {
           const callback = args.pop() as (
             result: EventResult<undefined>
           ) => void;
-          const result = this.onJoinRoom(socket, ...args);
+          const username = args[0] as string;
+          const roomName = args[1] as string;
+          const argumentError = validateEventArguments(
+            [nonEmptyString("Username"), nonEmptyString("Room name")],
+            [username, roomName]
+          );
+
+          if (argumentError) {
+            callback(argumentError);
+            return;
+          }
+
+          const result = this.onJoinRoom(socket, username, roomName);
 
           this.log.info(`Event joinRoom emitted by ${socket.id}:`, result);
 
@@ -222,23 +246,11 @@ export class VNSyncServer {
    * @param args Arguments passed to the event.
    * @returns The event result.
    */
-  private onCreateRoom(
-    socket: Socket,
-    ...args: unknown[]
-  ): EventResult<string> {
+  private onCreateRoom(socket: Socket, username: string): EventResult<string> {
     if (this.isInARoom(socket.id)) {
       return {
         status: "fail",
         failMessage: "This user is already in a room.",
-      };
-    }
-
-    const username = args[0] as string;
-
-    if (typeof username !== "string" || username === "") {
-      return {
-        status: "fail",
-        failMessage: "Username should be a non-empty string.",
       };
     }
 
@@ -279,30 +291,13 @@ export class VNSyncServer {
    */
   private onJoinRoom(
     socket: Socket,
-    ...args: unknown[]
+    username: string,
+    roomName: string
   ): EventResult<undefined> {
     if (this.isInARoom(socket.id)) {
       return {
         status: "fail",
         failMessage: "This user is already in a room.",
-      };
-    }
-
-    const username = args[0] as string;
-
-    if (typeof username !== "string" || username === "") {
-      return {
-        status: "fail",
-        failMessage: "Username should be a non-empty string.",
-      };
-    }
-
-    const roomName = args[1] as string;
-
-    if (typeof roomName !== "string" || roomName === "") {
-      return {
-        status: "fail",
-        failMessage: "Room name should be a non-empty string.",
       };
     }
 
