@@ -243,18 +243,24 @@ export class VNSyncServer {
     }
 
     const roomName = this.generateRoomName();
+    const room: Room = {
+      name: roomName,
+      connections: [],
+    };
     const connection = {
       username,
       isHost: true,
-      roomName,
+      room,
       socket,
       isReady: false,
     };
 
+    room.connections = [connection];
+
     this.connections.set(socket.id, connection);
-    this.rooms.set(roomName, { connections: [connection], host: connection });
+    this.rooms.set(roomName, room);
     socket.join(roomName);
-    this.emitRoomStateChange(roomName);
+    this.emitRoomStateChange(room);
 
     this.log.info(`Connection ${username}: created room ${roomName}`);
 
@@ -321,7 +327,7 @@ export class VNSyncServer {
     const connection = {
       username,
       isHost: false,
-      roomName,
+      room,
       socket,
       isReady: false,
     };
@@ -329,7 +335,7 @@ export class VNSyncServer {
     this.connections.set(socket.id, connection);
     room.connections.push(connection);
     socket.join(roomName);
-    this.emitRoomStateChange(roomName);
+    this.emitRoomStateChange(room);
 
     this.log.info(`Connection ${username}: joined room ${roomName}`);
 
@@ -359,11 +365,11 @@ export class VNSyncServer {
     }
 
     connection.isReady = !connection.isReady;
-    this.entireRoomReadyCheck(connection.roomName);
-    this.emitRoomStateChange(connection.roomName);
+    this.entireRoomReadyCheck(connection.room);
+    this.emitRoomStateChange(connection.room);
 
     this.log.info(
-      `Connection ${connection.roomName}/${connection.username}: toggled state`
+      `Connection ${connection.room.name}/${connection.username}: toggled state`
     );
 
     return {
@@ -379,11 +385,12 @@ export class VNSyncServer {
    */
   private onDisconnect(socket: Socket): void {
     const connection = this.connections.get(socket.id);
-    const room = this.rooms.get(connection?.roomName || "");
 
-    if (connection === undefined || room === undefined) {
+    if (connection === undefined) {
       return;
     }
+
+    const room = connection.room;
 
     // Update room's connections.
     room.connections = room.connections.filter(
@@ -396,21 +403,21 @@ export class VNSyncServer {
         roomConnection.socket.disconnect();
       }
 
-      this.rooms.delete(connection.roomName);
+      this.rooms.delete(connection.room.name);
 
-      this.log.info(`Room ${connection.roomName}: deleted`);
+      this.log.info(`Room ${connection.room.name}: deleted`);
     }
 
     // Emit a state change event if not host.
     if (!connection.isHost) {
-      this.entireRoomReadyCheck(connection.roomName);
-      this.emitRoomStateChange(connection.roomName);
+      this.entireRoomReadyCheck(connection.room);
+      this.emitRoomStateChange(connection.room);
     }
 
     this.connections.delete(socket.id);
 
     this.log.info(
-      `Connection ${connection.roomName}/${connection.username}: left`
+      `Connection ${connection.room.name}/${connection.username}: left`
     );
   }
 
@@ -474,22 +481,16 @@ export class VNSyncServer {
    *
    * @param roomName The name of the room to emit the update to.
    */
-  private emitRoomStateChange(roomName: string): void {
-    const room = this.rooms.get(roomName);
-
-    if (!room) {
-      throw new Error(`Room "${roomName}" doesn't exist.`);
-    }
-
+  private emitRoomStateChange(room: Room): void {
     const state = room.connections.map((roomConnection) => ({
       username: roomConnection.username,
       isReady: roomConnection.isReady,
       isHost: roomConnection.isHost,
     }));
 
-    this.wsServer.in(roomName).emit("roomStateChange", state);
+    this.wsServer.in(room.name).emit("roomStateChange", state);
 
-    this.log.info(`Room ${roomName}: state changed`, state);
+    this.log.info(`Room ${room.name}: state changed`, state);
   }
 
   /**
@@ -498,13 +499,7 @@ export class VNSyncServer {
    *
    * @param roomName The name of the room to check.
    */
-  private entireRoomReadyCheck(roomName: string): void {
-    const room = this.rooms.get(roomName);
-
-    if (!room) {
-      throw new Error("The room is not present in the rooms map.");
-    }
-
+  private entireRoomReadyCheck(room: Room): void {
     if (room.connections.length === 0) {
       return;
     }
@@ -522,9 +517,15 @@ export class VNSyncServer {
       roomConnection.isReady = false;
     }
 
-    this.wsServer.to(room.host.socket.id).emit("roomReady");
+    const host = room.connections.find((connection) => connection.isHost);
 
-    this.log.info(`Room ${roomName}: emitted room ready to host`);
+    if (!host) {
+      return;
+    }
+
+    this.wsServer.to(host.socket.id).emit("roomReady");
+
+    this.log.info(`Room ${room.name}: emitted room ready to host`);
   }
 
   /**
