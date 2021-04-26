@@ -38,7 +38,7 @@ export class VNSyncServer {
   /**
    * Socket.io server instance.
    */
-  private readonly wsServer: Server;
+  private readonly io: Server;
 
   /**
    * Current connections.
@@ -82,7 +82,7 @@ export class VNSyncServer {
     });
 
     this.httpServer = createServer(this.expressApp);
-    this.wsServer = new Server(this.httpServer, {
+    this.io = new Server(this.httpServer, {
       cors: {
         origin: "*",
       },
@@ -108,7 +108,7 @@ export class VNSyncServer {
   public close(): void {
     this.log.info("Closing the server...");
 
-    this.wsServer.close();
+    this.io.close();
     this.httpServer.close();
   }
 
@@ -155,7 +155,7 @@ export class VNSyncServer {
   private initServer(): void {
     this.log.info("Initializing the server...");
 
-    this.wsServer
+    this.io
       .use((socket, next) => {
         if (this.isAddressBlocked(socket.handshake.address)) {
           next(new Error("Too many connections from the same address."));
@@ -485,7 +485,7 @@ export class VNSyncServer {
       isHost: roomConnection.isHost,
     }));
 
-    this.wsServer.in(room.name).emit("roomStateChange", state);
+    this.io.in(room.name).emit("roomStateChange", state);
 
     this.log.info(`Room ${room.name}: state changed`, state);
   }
@@ -520,7 +520,7 @@ export class VNSyncServer {
       return;
     }
 
-    this.wsServer.to(host.socket.id).emit("roomReady");
+    this.io.to(host.socket.id).emit("roomReady");
 
     this.log.info(`Room ${room.name}: emitted room ready to host`);
   }
