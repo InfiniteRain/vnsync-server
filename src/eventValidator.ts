@@ -1,4 +1,5 @@
 import { EventResult } from "./interfaces/EventResult";
+import { VNSyncSocket } from "./interfaces/VNSyncSocket";
 
 /**
  * Each rule should be a function that takes a value of the unknown type and
@@ -47,3 +48,29 @@ export const nonEmptyString = (fieldName: string): ValidationRule => (
   typeof field === "string" && field.length > 0,
   `${fieldName} should be a non-empty string.`,
 ];
+
+/**
+ * Validates the room presence of a client.
+ *
+ * @param socket The socket of the client in question.
+ * @param expected Expected presence. True for the client being present in a
+ * room, and false for not.
+ * @returns A boolean depending on whether the client is in a room or not.
+ */
+export const validateRoomPresence = <T = undefined>(
+  socket: VNSyncSocket,
+  expected: boolean
+): EventResult<T> | null => {
+  const isInRoom = socket.room !== null;
+
+  if (isInRoom === expected) {
+    return null;
+  }
+
+  return {
+    status: "fail",
+    failMessage: expected
+      ? "This user is not yet in a room."
+      : "This user is already in a room.",
+  };
+};

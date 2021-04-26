@@ -1,14 +1,18 @@
 import express from "express";
 import path from "path";
 import { createServer, Server as HTTPServer } from "http";
-import { Server, Socket } from "socket.io";
-import { Connection } from "./interfaces/Connection";
+import { Server } from "socket.io";
 import { EventResult } from "./interfaces/EventResult";
 import { cloneDeep } from "lodash";
 import { Logger } from "loglevel";
 import { Configuration } from "./interfaces/Configuration";
-import { nonEmptyString, validateEventArguments } from "./eventValidator";
-import { getRoomConnections, getRoomMembers, roomExists } from "./helpers";
+import {
+  nonEmptyString,
+  validateEventArguments,
+  validateRoomPresence,
+} from "./eventValidator";
+import { getAllClients, getRoomMembers, roomExists } from "./helpers";
+import { VNSyncSocket } from "./interfaces/VNSyncSocket";
 
 /**
  * Default configuration.
@@ -39,11 +43,6 @@ export class VNSyncServer {
    * Socket.io server instance.
    */
   private readonly io: Server;
-
-  /**
-   * Current connections.
-   */
-  private readonly connections: Map<string, Connection> = new Map();
 
   /**
    * This map represents the amount of connections made from a single ip
@@ -108,11 +107,11 @@ export class VNSyncServer {
   }
 
   /**
-   * Gets a snapshot of current connections, deeply cloned.
+   * Gets a snapshot of currently connected clients, deeply cloned.
    * Used only for tests.
    */
-  public get connectionsSnapshot(): Map<string, Connection> {
-    return cloneDeep(this.connections);
+  public get clientsSnapshot(): Map<string, VNSyncSocket> {
+    return cloneDeep(getAllClients(this.io));
   }
 
   /**
@@ -159,18 +158,16 @@ export class VNSyncServer {
 
         next();
       })
-      .on("connection", (socket) => {
+      .on("connection", (connectionSocket) => {
+        const socket = connectionSocket as VNSyncSocket;
+
         this.log.info(`Socket ${socket.id}: connecting...`);
 
-        const connection = {
-          username: "",
-          isHost: false,
-          room: null,
-          socket,
-          isReady: false,
-        };
+        socket.username = "";
+        socket.isHost = false;
+        socket.room = null;
+        socket.isReady = false;
 
-        this.connections.set(socket.id, connection);
         this.addAddress(socket.handshake.address);
 
         socket.on("createRoom", (...args: unknown[]) => {
@@ -180,14 +177,14 @@ export class VNSyncServer {
             validateEventArguments<string>(
               [nonEmptyString("Username")],
               [username]
-            ) || this.validateRoomPresence<string>(connection, false);
+            ) || validateRoomPresence<string>(socket, false);
 
           if (validationError) {
             callback(validationError);
             return;
           }
 
-          const result = this.onCreateRoom(socket, connection, username);
+          const result = this.onCreateRoom(socket, username);
 
           this.log.info(`Event createRoom emitted by ${socket.id}:`, result);
 
@@ -204,19 +201,14 @@ export class VNSyncServer {
             validateEventArguments(
               [nonEmptyString("Username"), nonEmptyString("Room name")],
               [username, roomName]
-            ) || this.validateRoomPresence(connection, false);
+            ) || validateRoomPresence(socket, false);
 
           if (validationError) {
             callback(validationError);
             return;
           }
 
-          const result = this.onJoinRoom(
-            socket,
-            connection,
-            username,
-            roomName
-          );
+          const result = this.onJoinRoom(socket, username, roomName);
 
           this.log.info(`Event joinRoom emitted by ${socket.id}:`, result);
 
@@ -227,22 +219,14 @@ export class VNSyncServer {
           const callback = args.pop() as (
             result: EventResult<undefined>
           ) => void;
-          const validationError = this.validateRoomPresence(connection, true);
+          const validationError = validateRoomPresence(socket, true);
 
           if (validationError) {
             callback(validationError);
             return;
           }
 
-          const room = connection.room;
-
-          if (!room) {
-            throw new Error(
-              "Connection is unexpectedly not present in any room."
-            );
-          }
-
-          const result = this.onToggleReady(connection, room);
+          const result = this.onToggleReady(socket, socket.room || "");
 
           this.log.info(`Event toggleReady emitted by ${socket.id}:`, result);
 
@@ -269,22 +253,20 @@ export class VNSyncServer {
    * Method that gets triggered on "createRoom" event.
    *
    * @param socket The socket that triggered the event.
-   * @param connection The connection of the socket that triggered the event.
    * @param username The username.
    * @returns The event result.
    */
   private onCreateRoom(
-    socket: Socket,
-    connection: Connection,
+    socket: VNSyncSocket,
     username: string
   ): EventResult<string> {
     const roomName = this.generateRoomName();
 
-    connection.username = username;
-    connection.room = roomName;
-    connection.isHost = true;
-
+    socket.username = username;
+    socket.room = roomName;
+    socket.isHost = true;
     socket.join(roomName);
+
     this.emitRoomStateChange(roomName);
 
     this.log.info(`Connection ${username}: created room ${roomName}`);
@@ -299,34 +281,24 @@ export class VNSyncServer {
    * Method that gets triggered on "joinRoom" event.
    *
    * @param socket The socket that triggered the event.
-   * @param connection The connection of the socket that triggered the event.
    * @param username The username.
    * @param roomName The room name.
    * @returns The event result.
    */
   private onJoinRoom(
-    socket: Socket,
-    connection: Connection,
+    socket: VNSyncSocket,
     username: string,
     roomName: string
   ): EventResult<undefined> {
-    const room = this.io.sockets.adapter.rooms.get(roomName);
-
-    if (!room) {
+    if (!roomExists(this.io, roomName)) {
       return {
         status: "fail",
         failMessage: `Room "${roomName}" doesn't exist.`,
       };
     }
 
-    for (const member of room) {
-      const memberConnection = this.connections.get(member);
-
-      if (!memberConnection) {
-        throw new Error("Member connection not found in the connections list.");
-      }
-
-      if (memberConnection.username === username) {
+    for (const member of getRoomMembers(this.io, roomName)) {
+      if (member.username === username) {
         return {
           status: "fail",
           failMessage: `Username "${username}" is already taken by someone else in this room.`,
@@ -334,10 +306,10 @@ export class VNSyncServer {
       }
     }
 
-    connection.room = roomName;
-    connection.username = username;
-
+    socket.room = roomName;
+    socket.username = username;
     socket.join(roomName);
+
     this.emitRoomStateChange(roomName);
 
     this.log.info(`Connection ${username}: joined room ${roomName}`);
@@ -355,16 +327,15 @@ export class VNSyncServer {
    * @returns The event result.
    */
   private onToggleReady(
-    connection: Connection,
+    socket: VNSyncSocket,
     roomName: string
   ): EventResult<undefined> {
-    connection.isReady = !connection.isReady;
+    socket.isReady = !socket.isReady;
+
     this.entireRoomReadyCheck(roomName);
     this.emitRoomStateChange(roomName);
 
-    this.log.info(
-      `Connection ${roomName}/${connection.username}: toggled state`
-    );
+    this.log.info(`Connection ${roomName}/${socket.username}: toggled state`);
 
     return {
       status: "ok",
@@ -377,40 +348,31 @@ export class VNSyncServer {
    * @param socket The socket that triggered the event.
    * @returns The event result.
    */
-  private onDisconnect(socket: Socket): void {
-    const connection = this.connections.get(socket.id);
-    const roomName = connection?.room;
+  private onDisconnect(socket: VNSyncSocket): void {
+    const roomName = socket.room;
 
-    // todo: theres a bug in here when user leaves before joining a room
+    this.log.info(`Connection ${roomName}/${socket.username}: left`);
 
-    if (!connection || !roomName) {
+    if (!roomName || !roomExists(this.io, roomName)) {
       return;
     }
 
     socket.leave(roomName);
 
-    this.connections.delete(socket.id);
-
-    this.log.info(`Connection ${roomName}/${connection.username}: left`);
-
-    if (!roomExists(this.io, roomName)) {
-      return;
-    }
-
     // Delete room and disconnect all users if host.
-    if (connection.isHost) {
-      for (const member of getRoomMembers(this.io, roomName).values()) {
+    if (socket.isHost) {
+      for (const member of getRoomMembers(this.io, roomName)) {
         member.disconnect();
       }
 
       this.log.info(`Room ${roomName}: deleted`);
+
+      return;
     }
 
     // Emit a state change event if not host.
-    if (!connection.isHost) {
-      this.entireRoomReadyCheck(roomName);
-      this.emitRoomStateChange(roomName);
-    }
+    this.entireRoomReadyCheck(roomName);
+    this.emitRoomStateChange(roomName);
   }
 
   /**
@@ -474,11 +436,10 @@ export class VNSyncServer {
    * @param roomName The room to emit the update to.
    */
   private emitRoomStateChange(roomName: string): void {
-    const connections = getRoomConnections(this.io, this.connections, roomName);
-    const state = connections.map((roomConnection) => ({
-      username: roomConnection.username,
-      isReady: roomConnection.isReady,
-      isHost: roomConnection.isHost,
+    const state = getRoomMembers(this.io, roomName).map((member) => ({
+      username: member.username,
+      isReady: member.isReady,
+      isHost: member.isHost,
     }));
 
     this.io.in(roomName).emit("roomStateChange", state);
@@ -497,56 +458,29 @@ export class VNSyncServer {
       return;
     }
 
-    const connections = getRoomConnections(this.io, this.connections, roomName);
-    const everyoneIsReady = connections.reduce(
+    const members = getRoomMembers(this.io, roomName);
+    const everyoneIsReady = members.reduce(
       (previousValue, currentValue) => previousValue && currentValue.isReady,
-      connections[0].isReady
+      members[0].isReady
     );
 
     if (!everyoneIsReady) {
       return;
     }
 
-    for (const roomConnection of connections) {
-      roomConnection.isReady = false;
+    for (const member of members) {
+      member.isReady = false;
     }
 
-    const host = connections.find((connection) => connection.isHost);
+    const host = members.find((member) => member.isHost);
 
     if (!host) {
       return;
     }
 
-    this.io.to(host.socket.id).emit("roomReady");
+    this.io.to(host.id).emit("roomReady");
 
-    this.log.info(`Room ${roomName}: emitted room ready to host`);
-  }
-
-  /**
-   * Validates the room presence of a connection.
-   *
-   * @param connection The connection in question.
-   * @param expected Expected presence. True for connection being present in a
-   * room, and false for not.
-   * @returns A boolean depending on whether the connection is in a room or
-   * not.
-   */
-  private validateRoomPresence<T = undefined>(
-    connection: Connection,
-    expected: boolean
-  ): EventResult<T> | null {
-    const isInRoom = connection.room !== null;
-
-    if (isInRoom === expected) {
-      return null;
-    }
-
-    return {
-      status: "fail",
-      failMessage: expected
-        ? "This user is not yet in a room."
-        : "This user is already in a room.",
-    };
+    this.log.info(`Room ${roomName}: emitted event roomReady to host`);
   }
 
   /**

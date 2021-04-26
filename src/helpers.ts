@@ -1,55 +1,65 @@
-import { Server, Socket } from "socket.io";
-import { Connection } from "./interfaces/Connection";
+import { Server } from "socket.io";
+import { VNSyncSocket } from "./interfaces/VNSyncSocket";
 
+/**
+ * Checks whether a room with the given name exists.
+ *
+ * @param io The server instance.
+ * @param roomName The name of the room in question.
+ * @returns True if the room exists, false otherwise.
+ */
 export const roomExists = (io: Server, roomName: string): boolean =>
   !!io.sockets.adapter.rooms.get(roomName);
 
+/**
+ * Gets room members.
+ *
+ * @param io The server instance.
+ * @param roomName The name of the room in question.
+ * @returns An array of members.
+ */
 export const getRoomMembers = (
   io: Server,
   roomName: string
-): Map<string, Socket> => {
+): VNSyncSocket[] => {
   const membersSet = io.sockets.adapter.rooms.get(roomName);
 
   if (!membersSet) {
-    console.trace("here");
     throw new Error("Room doesn't exist.");
   }
 
-  const members = new Map<string, Socket>();
+  const members: VNSyncSocket[] = [];
 
   for (const memberId of membersSet.values()) {
-    members.set(memberId, getClientById(io, memberId));
+    members.push(getClientById(io, memberId));
   }
 
   return members;
 };
 
-export const getRoomConnections = (
-  io: Server,
-  connections: Map<string, Connection>,
-  roomName: string
-): Connection[] => {
-  const connectionsArray: Connection[] = [];
-
-  for (const member of getRoomMembers(io, roomName).values()) {
-    const connection = connections.get(member.id);
-
-    if (!connection) {
-      throw new Error("Member connection not found in the connections list.");
-    }
-
-    connectionsArray.push(connection);
-  }
-
-  return connectionsArray;
+/**
+ * Gets all clients currently connected to the server.
+ *
+ * @param io The server instance.
+ * @returns A map of clients.
+ */
+export const getAllClients = (io: Server): Map<string, VNSyncSocket> => {
+  return io.of("/").sockets as Map<string, VNSyncSocket>;
 };
 
-export const getClientById = (io: Server, id: string): Socket => {
+/**
+ * Gets a client by its socket ID.
+ *
+ * @param io The server instance.
+ * @param id The ID of the client in question.
+ * @returns The client in question.
+ */
+const getClientById = (io: Server, id: string): VNSyncSocket => {
   const client = io.of("/").sockets.get(id);
 
   if (!client) {
     throw new Error("Client doesn't exist.");
   }
 
-  return client;
+  return client as VNSyncSocket;
 };
