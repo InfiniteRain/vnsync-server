@@ -4,11 +4,11 @@ import { createServer, Server as HTTPServer } from "http";
 import { Server, Socket } from "socket.io";
 import { Connection } from "./interfaces/Connection";
 import { EventResult } from "./interfaces/EventResult";
-import { Room } from "./interfaces/Room";
 import { cloneDeep } from "lodash";
 import { Logger } from "loglevel";
 import { Configuration } from "./interfaces/Configuration";
 import { nonEmptyString, validateEventArguments } from "./eventValidator";
+import { getRoomConnections, getRoomMembers, roomExists } from "./helpers";
 
 /**
  * Default configuration.
@@ -44,11 +44,6 @@ export class VNSyncServer {
    * Current connections.
    */
   private readonly connections: Map<string, Connection> = new Map();
-
-  /**
-   * Current rooms.
-   */
-  private readonly rooms: Map<string, Room> = new Map();
 
   /**
    * This map represents the amount of connections made from a single ip
@@ -124,8 +119,8 @@ export class VNSyncServer {
    * Gets a snapshot of current rooms, deeply cloned.
    * Used only for tests.
    */
-  public get roomsSnapshot(): Map<string, Room> {
-    return cloneDeep(this.rooms);
+  public get roomsSnapshot(): Map<string, Set<string>> {
+    return cloneDeep(this.io.sockets.adapter.rooms);
   }
 
   /**
@@ -284,18 +279,13 @@ export class VNSyncServer {
     username: string
   ): EventResult<string> {
     const roomName = this.generateRoomName();
-    const room: Room = {
-      name: roomName,
-      connections: [connection],
-    };
 
     connection.username = username;
-    connection.room = room;
+    connection.room = roomName;
     connection.isHost = true;
 
-    this.rooms.set(roomName, room);
     socket.join(roomName);
-    this.emitRoomStateChange(room);
+    this.emitRoomStateChange(roomName);
 
     this.log.info(`Connection ${username}: created room ${roomName}`);
 
@@ -320,7 +310,7 @@ export class VNSyncServer {
     username: string,
     roomName: string
   ): EventResult<undefined> {
-    const room = this.rooms.get(roomName);
+    const room = this.io.sockets.adapter.rooms.get(roomName);
 
     if (!room) {
       return {
@@ -329,8 +319,14 @@ export class VNSyncServer {
       };
     }
 
-    for (const connection of room.connections) {
-      if (connection.username === username) {
+    for (const member of room) {
+      const memberConnection = this.connections.get(member);
+
+      if (!memberConnection) {
+        throw new Error("Member connection not found in the connections list.");
+      }
+
+      if (memberConnection.username === username) {
         return {
           status: "fail",
           failMessage: `Username "${username}" is already taken by someone else in this room.`,
@@ -338,13 +334,11 @@ export class VNSyncServer {
       }
     }
 
-    room.connections.push(connection);
-
-    connection.room = room;
+    connection.room = roomName;
     connection.username = username;
 
     socket.join(roomName);
-    this.emitRoomStateChange(room);
+    this.emitRoomStateChange(roomName);
 
     this.log.info(`Connection ${username}: joined room ${roomName}`);
 
@@ -357,19 +351,19 @@ export class VNSyncServer {
    * Method that gets triggered on "toggleReady" event.
    *
    * @param socket The socket that triggered the event.
-   * @param room The room that the event got triggered for.
+   * @param roomName The room that the event got triggered for.
    * @returns The event result.
    */
   private onToggleReady(
     connection: Connection,
-    room: Room
+    roomName: string
   ): EventResult<undefined> {
     connection.isReady = !connection.isReady;
-    this.entireRoomReadyCheck(room);
-    this.emitRoomStateChange(room);
+    this.entireRoomReadyCheck(roomName);
+    this.emitRoomStateChange(roomName);
 
     this.log.info(
-      `Connection ${room.name}/${connection.username}: toggled state`
+      `Connection ${roomName}/${connection.username}: toggled state`
     );
 
     return {
@@ -385,37 +379,38 @@ export class VNSyncServer {
    */
   private onDisconnect(socket: Socket): void {
     const connection = this.connections.get(socket.id);
-    const room = connection?.room;
+    const roomName = connection?.room;
 
-    if (!connection || !room) {
+    // todo: theres a bug in here when user leaves before joining a room
+
+    if (!connection || !roomName) {
       return;
     }
 
-    // Update room's connections.
-    room.connections = room.connections.filter(
-      (roomConnection) => roomConnection.username !== connection.username
-    );
+    socket.leave(roomName);
+
+    this.connections.delete(socket.id);
+
+    this.log.info(`Connection ${roomName}/${connection.username}: left`);
+
+    if (!roomExists(this.io, roomName)) {
+      return;
+    }
 
     // Delete room and disconnect all users if host.
     if (connection.isHost) {
-      for (const roomConnection of room.connections) {
-        roomConnection.socket.disconnect();
+      for (const member of getRoomMembers(this.io, roomName).values()) {
+        member.disconnect();
       }
 
-      this.rooms.delete(room.name);
-
-      this.log.info(`Room ${room.name}: deleted`);
+      this.log.info(`Room ${roomName}: deleted`);
     }
 
     // Emit a state change event if not host.
     if (!connection.isHost) {
-      this.entireRoomReadyCheck(room);
-      this.emitRoomStateChange(room);
+      this.entireRoomReadyCheck(roomName);
+      this.emitRoomStateChange(roomName);
     }
-
-    this.connections.delete(socket.id);
-
-    this.log.info(`Connection ${room.name}/${connection.username}: left`);
   }
 
   /**
@@ -476,18 +471,19 @@ export class VNSyncServer {
   /**
    * Emits a "roomStateChange" event.
    *
-   * @param room The room to emit the update to.
+   * @param roomName The room to emit the update to.
    */
-  private emitRoomStateChange(room: Room): void {
-    const state = room.connections.map((roomConnection) => ({
+  private emitRoomStateChange(roomName: string): void {
+    const connections = getRoomConnections(this.io, this.connections, roomName);
+    const state = connections.map((roomConnection) => ({
       username: roomConnection.username,
       isReady: roomConnection.isReady,
       isHost: roomConnection.isHost,
     }));
 
-    this.io.in(room.name).emit("roomStateChange", state);
+    this.io.in(roomName).emit("roomStateChange", state);
 
-    this.log.info(`Room ${room.name}: state changed`, state);
+    this.log.info(`Room ${roomName}: state changed`, state);
   }
 
   /**
@@ -496,25 +492,26 @@ export class VNSyncServer {
    *
    * @param room The room to check.
    */
-  private entireRoomReadyCheck(room: Room): void {
-    if (room.connections.length === 0) {
+  private entireRoomReadyCheck(roomName: string): void {
+    if (!roomExists(this.io, roomName)) {
       return;
     }
 
-    const everyoneIsReady = room.connections.reduce(
+    const connections = getRoomConnections(this.io, this.connections, roomName);
+    const everyoneIsReady = connections.reduce(
       (previousValue, currentValue) => previousValue && currentValue.isReady,
-      room.connections[0].isReady
+      connections[0].isReady
     );
 
     if (!everyoneIsReady) {
       return;
     }
 
-    for (const roomConnection of room.connections) {
+    for (const roomConnection of connections) {
       roomConnection.isReady = false;
     }
 
-    const host = room.connections.find((connection) => connection.isHost);
+    const host = connections.find((connection) => connection.isHost);
 
     if (!host) {
       return;
@@ -522,7 +519,7 @@ export class VNSyncServer {
 
     this.io.to(host.socket.id).emit("roomReady");
 
-    this.log.info(`Room ${room.name}: emitted room ready to host`);
+    this.log.info(`Room ${roomName}: emitted room ready to host`);
   }
 
   /**
@@ -562,7 +559,7 @@ export class VNSyncServer {
 
     do {
       roomName = Math.random().toString(36).substring(2, 15);
-    } while (this.rooms.has(roomName));
+    } while (roomExists(this.io, roomName));
 
     return roomName;
   }

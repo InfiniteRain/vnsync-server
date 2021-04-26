@@ -1,5 +1,4 @@
 import { Socket } from "socket.io";
-import { Room } from "./Room";
 
 /**
  * Interface reprsenting a connection to the server.
@@ -23,7 +22,7 @@ export interface Connection {
   /**
    * The room that the connection belongs to.
    */
-  room: Room | null;
+  room: string | null;
 
   /**
    * A boolean which dentoes the ready state of the connection.
