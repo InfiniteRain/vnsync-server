@@ -6,6 +6,15 @@ import { getLogger } from "loglevel";
 import { VNSyncSocket } from "./interfaces/VNSyncSocket";
 
 describe("vnsync server", () => {
+  type RoomState = {
+    clipboard: string[];
+    membersState: {
+      username: string;
+      isHost: boolean;
+      isReady: boolean;
+    }[];
+  };
+
   let wsServer: VNSyncServer;
   let wsClients: Socket[] = [];
   let user: Socket;
@@ -104,6 +113,17 @@ describe("vnsync server", () => {
     socket: Socket
   ): Promise<EventResult<void>> => {
     return await promiseEmit<EventResult<void>>(socket, "toggleReady");
+  };
+
+  const emitUpdateClipboard = async (
+    socket: Socket,
+    entry: string
+  ): Promise<EventResult<void>> => {
+    return await promiseEmit<EventResult<void>>(
+      socket,
+      "updateClipboard",
+      entry
+    );
   };
 
   const generateEventCounter = (
@@ -450,9 +470,10 @@ describe("vnsync server", () => {
     });
 
     test("users receive state updates once they create or join a room", async () => {
-      const expectedRoomState = [
-        { username: "user", isHost: true, isReady: false },
-      ];
+      const expectedRoomState = {
+        clipboard: [],
+        membersState: [{ username: "user", isHost: true, isReady: false }],
+      };
 
       const [advanceEventCounter, counterOf] = generateEventCounter(3);
       const waitFor1st = counterOf(1);
@@ -466,7 +487,7 @@ describe("vnsync server", () => {
       const roomName = await createRoom(user);
       await waitFor1st;
 
-      expectedRoomState.push({
+      expectedRoomState.membersState.push({
         username: "user2",
         isHost: false,
         isReady: false,
@@ -498,10 +519,13 @@ describe("vnsync server", () => {
       const [advanceEventCounter, counterOf] = generateEventCounter(2);
       const waitFor2nd = counterOf(2);
 
-      const expectedRoomState = [
-        { username: "user", isHost: true, isReady: false },
-        { username: "user3", isHost: false, isReady: false },
-      ];
+      const expectedRoomState = {
+        clipboard: [],
+        membersState: [
+          { username: "user", isHost: true, isReady: false },
+          { username: "user3", isHost: false, isReady: false },
+        ],
+      };
 
       user.on("roomStateChange", (state) => {
         expect(state).toEqual(cloneDeep(expectedRoomState));
@@ -528,11 +552,14 @@ describe("vnsync server", () => {
       const waitFor6th = counterOf(6);
       const waitFor9th = counterOf(9);
 
-      const expectedRoomState = [
-        { username: "user", isHost: true, isReady: true },
-        { username: "user2", isHost: false, isReady: false },
-        { username: "user3", isHost: false, isReady: false },
-      ];
+      const expectedRoomState = {
+        clipboard: [],
+        membersState: [
+          { username: "user", isHost: true, isReady: true },
+          { username: "user2", isHost: false, isReady: false },
+          { username: "user3", isHost: false, isReady: false },
+        ],
+      };
 
       user.on("roomStateChange", (state) => {
         expect(state).toEqual(cloneDeep(expectedRoomState));
@@ -554,13 +581,13 @@ describe("vnsync server", () => {
 
       await waitFor3rd;
 
-      expectedRoomState[2].isReady = true;
+      expectedRoomState.membersState[2].isReady = true;
       const result2 = await emitToggleReady(user3);
       expect(result2.status).toEqual("ok");
 
       await waitFor6th;
 
-      expectedRoomState[0].isReady = false;
+      expectedRoomState.membersState[0].isReady = false;
       const result3 = await emitToggleReady(user);
       expect(result3.status).toEqual("ok");
 
@@ -582,11 +609,14 @@ describe("vnsync server", () => {
       );
       const waitFor1stReady = counterOfReady(1);
 
-      const expectedRoomState = [
-        { username: "user", isHost: true, isReady: true },
-        { username: "user2", isHost: false, isReady: false },
-        { username: "user3", isHost: false, isReady: false },
-      ];
+      const expectedRoomState = {
+        clipboard: [],
+        membersState: [
+          { username: "user", isHost: true, isReady: true },
+          { username: "user2", isHost: false, isReady: false },
+          { username: "user3", isHost: false, isReady: false },
+        ],
+      };
 
       user.on("roomStateChange", (state) => {
         expect(state).toEqual(cloneDeep(expectedRoomState));
@@ -610,12 +640,12 @@ describe("vnsync server", () => {
       await emitToggleReady(user);
       await waitFor3rd;
 
-      expectedRoomState[1].isReady = true;
+      expectedRoomState.membersState[1].isReady = true;
       await emitToggleReady(user2);
       await waitFor6th;
 
-      expectedRoomState[0].isReady = false;
-      expectedRoomState[1].isReady = false;
+      expectedRoomState.membersState[0].isReady = false;
+      expectedRoomState.membersState[1].isReady = false;
       await emitToggleReady(user3);
       await waitFor9th;
       await waitFor1stReady;
@@ -636,11 +666,14 @@ describe("vnsync server", () => {
       );
       const waitFor1stReady = counterOfReady(1);
 
-      const expectedRoomState = [
-        { username: "user", isHost: true, isReady: true },
-        { username: "user2", isHost: false, isReady: false },
-        { username: "user3", isHost: false, isReady: false },
-      ];
+      const expectedRoomState = {
+        clipboard: [],
+        membersState: [
+          { username: "user", isHost: true, isReady: true },
+          { username: "user2", isHost: false, isReady: false },
+          { username: "user3", isHost: false, isReady: false },
+        ],
+      };
 
       user.on("roomStateChange", (state) => {
         expect(state).toEqual(cloneDeep(expectedRoomState));
@@ -659,13 +692,13 @@ describe("vnsync server", () => {
       await emitToggleReady(user);
       await waitFor2nd;
 
-      expectedRoomState[2].isReady = true;
+      expectedRoomState.membersState[2].isReady = true;
       await emitToggleReady(user3);
       await waitFor4th;
 
-      expectedRoomState.splice(1, 1);
-      expectedRoomState[0].isReady = false;
-      expectedRoomState[1].isReady = false;
+      expectedRoomState.membersState.splice(1, 1);
+      expectedRoomState.membersState[0].isReady = false;
+      expectedRoomState.membersState[1].isReady = false;
       user2.disconnect();
       await wsServer.awaitForDisconnect();
       await waitFor6th;
@@ -685,9 +718,10 @@ describe("vnsync server", () => {
       const waitFor1stReady = counterOfReady(1);
       const waitFor2ndReady = counterOfReady(2);
 
-      const expectedRoomState = [
-        { username: "user", isHost: true, isReady: false },
-      ];
+      const expectedRoomState = {
+        clipboard: [],
+        membersState: [{ username: "user", isHost: true, isReady: false }],
+      };
 
       user.on("roomStateChange", (state) => {
         expect(state).toEqual(cloneDeep(expectedRoomState));
@@ -705,6 +739,101 @@ describe("vnsync server", () => {
       await emitToggleReady(user);
       await waitFor2nd;
       await waitFor2ndReady;
+    });
+
+    test("host attempts to update clipboard while not in a room", async () => {
+      const result = await emitUpdateClipboard(user, "something");
+
+      expect(result.status).toEqual("fail");
+      expect(result.failMessage).toEqual("This user is not yet in a room.");
+      expect(result.data).toBeUndefined();
+    });
+
+    test("host attempts to update clipboard with bad argument", async () => {
+      await createRoom(user);
+      // @ts-expect-error Type mismatch is expected in here.
+      const result = await emitUpdateClipboard(user, undefined);
+
+      expect(result.status).toEqual("fail");
+      expect(result.failMessage).toEqual("Clipboard entry should be a string.");
+      expect(result.data).toBeUndefined();
+    });
+
+    test("user attempts to update clipboard as a non-host", async () => {
+      const roomName = await createRoom(user);
+      const user2 = await addNewUserToARoom("user2", roomName);
+
+      const result = await emitUpdateClipboard(user2, "something");
+
+      expect(result.status).toEqual("fail");
+      expect(result.failMessage).toEqual("This user is not a host.");
+      expect(result.data).toBeUndefined();
+    });
+
+    test("host updates clipboard", async () => {
+      await createRoom(user);
+
+      const [
+        advanceClipboardCounter,
+        counterOfClipboard,
+      ] = generateEventCounter(2);
+
+      const expectedRoomState: RoomState = {
+        clipboard: [],
+        membersState: [{ username: "user", isHost: true, isReady: false }],
+      };
+      const waitFor1st = counterOfClipboard(1);
+      const waitFor2nd = counterOfClipboard(2);
+
+      user.on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceClipboardCounter();
+      });
+
+      expectedRoomState.clipboard.unshift("text1");
+
+      const result = await emitUpdateClipboard(user, "text1");
+      expect(result.status).toEqual("ok");
+      await waitFor1st;
+
+      expectedRoomState.clipboard.unshift("text2");
+
+      const result2 = await emitUpdateClipboard(user, "text2");
+      expect(result2.status).toEqual("ok");
+      await waitFor2nd;
+    });
+
+    test("host posts one entry over the limit", async () => {
+      await createRoom(user);
+
+      const [
+        advanceClipboardCounter,
+        counterOfClipboard,
+      ] = generateEventCounter(51);
+
+      const expectedRoomState: RoomState = {
+        clipboard: [],
+        membersState: [{ username: "user", isHost: true, isReady: false }],
+      };
+
+      const range = [...new Array(51).keys()];
+      const waitFors = range.map((value) => counterOfClipboard(value + 1));
+
+      user.on("roomStateChange", (state) => {
+        expect(state).toEqual(cloneDeep(expectedRoomState));
+        advanceClipboardCounter();
+      });
+
+      for (const index of range) {
+        const clipboardEntry = `text${index}`;
+
+        expectedRoomState.clipboard.unshift(clipboardEntry);
+        expectedRoomState.clipboard = expectedRoomState.clipboard.slice(0, 50);
+
+        const result = await emitUpdateClipboard(user, clipboardEntry);
+        expect(result.status).toEqual("ok");
+        await waitFors[index];
+      }
     });
   });
 

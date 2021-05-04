@@ -23,4 +23,9 @@ export interface VNSyncSocket extends Socket {
    * A boolean which denotes the ready state of the client.
    */
   isReady: boolean;
+
+  /**
+   * An array of strings representing the host's clipboard history.
+   */
+  clipboard: string[];
 }

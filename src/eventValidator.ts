@@ -50,6 +50,16 @@ export const nonEmptyString = (fieldName: string): ValidationRule => (
 ];
 
 /**
+ * A factory function which generates a validation rule for a string field.
+ *
+ * @param fieldName The name of the field getting validated.
+ * @returns The validation rule.
+ */
+export const string = (fieldName: string): ValidationRule => (
+  field: unknown
+) => [typeof field === "string", `${fieldName} should be a string.`];
+
+/**
  * Validates the room presence of a client.
  *
  * @param socket The socket of the client in question.

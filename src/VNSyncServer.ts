@@ -8,6 +8,7 @@ import { Logger } from "loglevel";
 import { Configuration } from "./interfaces/Configuration";
 import {
   nonEmptyString,
+  string,
   validateEventArguments,
   validateRoomPresence,
 } from "./eventValidator";
@@ -20,6 +21,10 @@ import { VNSyncSocket } from "./interfaces/VNSyncSocket";
 const defaultConfiguration: Configuration = {
   maxConnectionsFromSingleSource: Number.parseInt(
     process.env.MAX_CONNECTIONS_FROM_SINGLE_SOURCE || "5"
+  ),
+
+  maxClipboardEntries: Number.parseInt(
+    process.env.MAX_CLIPBOARD_ENTRIES || "50"
   ),
 };
 
@@ -167,6 +172,7 @@ export class VNSyncServer {
         socket.isHost = false;
         socket.room = null;
         socket.isReady = false;
+        socket.clipboard = [];
 
         this.addAddress(socket.handshake.address);
 
@@ -229,6 +235,36 @@ export class VNSyncServer {
           const result = this.onToggleReady(socket, socket.room || "");
 
           this.log.info(`Event toggleReady emitted by ${socket.id}:`, result);
+
+          callback(result);
+        });
+
+        socket.on("updateClipboard", (...args: unknown[]) => {
+          const callback = args.pop() as (
+            result: EventResult<undefined>
+          ) => void;
+          const clipboardEntry = args[0] as string;
+          const validationError =
+            validateEventArguments(
+              [string("Clipboard entry")],
+              [clipboardEntry]
+            ) || validateRoomPresence(socket, true);
+
+          if (validationError) {
+            callback(validationError);
+            return;
+          }
+
+          const result = this.onUpdateClipboard(
+            socket,
+            clipboardEntry,
+            socket.room || ""
+          );
+
+          this.log.info(
+            `Event updateClipboard emitted by ${socket.id}:`,
+            result
+          );
 
           callback(result);
         });
@@ -343,6 +379,39 @@ export class VNSyncServer {
   }
 
   /**
+   * Method that gets triggered on "updateClipboard" event.
+   *
+   * @param socket The socket that triggered the event.
+   * @param clipboardEntry The clipboard entry.
+   * @param roomName The room that the event got triggered for.
+   * @returns The event result.
+   */
+  private onUpdateClipboard(
+    socket: VNSyncSocket,
+    clipboardEntry: string,
+    roomName: string
+  ): EventResult<undefined> {
+    if (!socket.isHost) {
+      return {
+        status: "fail",
+        failMessage: "This user is not a host.",
+      };
+    }
+
+    socket.clipboard.unshift(clipboardEntry);
+    socket.clipboard = socket.clipboard.slice(
+      0,
+      this.configuration.maxClipboardEntries
+    );
+
+    this.emitRoomStateChange(roomName);
+
+    return {
+      status: "ok",
+    };
+  }
+
+  /**
    * Method that gets triggered on "disconnect" event.
    *
    * @param socket The socket that triggered the event.
@@ -436,11 +505,19 @@ export class VNSyncServer {
    * @param roomName The room to emit the update to.
    */
   private emitRoomStateChange(roomName: string): void {
-    const state = getRoomMembers(this.io, roomName).map((member) => ({
+    const members = getRoomMembers(this.io, roomName);
+
+    const host = members.find((member) => member.isHost);
+    const membersState = members.map((member) => ({
       username: member.username,
       isReady: member.isReady,
       isHost: member.isHost,
     }));
+
+    const state = {
+      clipboard: host?.clipboard || [],
+      membersState,
+    };
 
     this.io.in(roomName).emit("roomStateChange", state);
 
