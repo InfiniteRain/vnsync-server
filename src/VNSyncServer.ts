@@ -235,11 +235,17 @@ export class VNSyncServer {
         next();
       })
       .use((socket, next) => {
-        const sessionSid = socket.handshake.auth.sessionId;
-        const ghostSession = this.ghostSessions.get(sessionSid);
+        const sessionId = socket.handshake.auth.sessionId;
+        const ghostSession = this.ghostSessions.get(sessionId);
+
+        if (sessionId) {
+          this.log.info(`Connection with sessionId: ${sessionId}`);
+        }
 
         if (ghostSession) {
-          this.ghostSessions.delete(sessionSid);
+          this.ghostSessions.delete(sessionId);
+
+          this.log.info(`Ghost session found: ${sessionId}`);
 
           if (!roomExists(this.io, ghostSession.data.room || "")) {
             next(new Error("The room for this session no longer exists."));
@@ -255,6 +261,9 @@ export class VNSyncServer {
         const socket = connectionSocket as VNSyncSocket;
 
         this.log.info(`Socket ${socket.id}: connecting...`);
+        this.log.info(
+          `Socket auth ${socket.id}: ${JSON.stringify(socket.handshake.auth)}`
+        );
 
         this.addAddress(socket.handshake.address);
 
