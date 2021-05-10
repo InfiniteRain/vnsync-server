@@ -234,10 +234,29 @@ export class VNSyncServer {
 
         next();
       })
+      .use((socket, next) => {
+        const sessionSid = socket.handshake.auth.sessionId;
+        const ghostSession = this.ghostSessions.get(sessionSid);
+
+        if (ghostSession) {
+          this.ghostSessions.delete(sessionSid);
+
+          if (!roomExists(this.io, ghostSession.data.room || "")) {
+            next(new Error("The room for this session no longer exists."));
+            return;
+          }
+
+          socket.data = ghostSession.data;
+        }
+
+        next();
+      })
       .on("connection", (connectionSocket) => {
         const socket = connectionSocket as VNSyncSocket;
 
         this.log.info(`Socket ${socket.id}: connecting...`);
+
+        this.addAddress(socket.handshake.address);
 
         socket.on("createRoom", (...args: unknown[]) => {
           const callback = args.pop() as (result: EventResult<string>) => void;
@@ -344,18 +363,37 @@ export class VNSyncServer {
           }
         });
 
+        const roomName = socket.data.room;
+
+        if (roomName && !roomExists(this.io, roomName)) {
+          socket.disconnect();
+
+          return;
+        }
+
+        if (roomName) {
+          socket.join(roomName);
+          this.emitRoomStateChange(roomName);
+
+          this.log.info(
+            `Connection ${roomName}/${socket.data.username}: reconnected`
+          );
+
+          return;
+        }
+
+        const sessionId = uuidv4();
+
         socket.data = {
+          sessionId,
           username: "",
           isHost: false,
           room: null,
           isReady: false,
           clipboard: [],
-          sessionId: uuidv4(),
         };
 
-        this.addAddress(socket.handshake.address);
-
-        this.log.info(`Socket ${socket.id}: connected`);
+        socket.emit("sessionId", sessionId);
       });
   }
 

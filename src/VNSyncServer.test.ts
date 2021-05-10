@@ -36,8 +36,11 @@ describe("vnsync server", () => {
     });
   };
 
-  const getNewWsClient = async (): Promise<Socket> => {
-    const newClient = io(connectionString);
+  const getNewWsClient = async (sessionId?: string): Promise<Socket> => {
+    const newClient = io(
+      connectionString,
+      sessionId ? { auth: { sessionId } } : undefined
+    );
     return new Promise((resolve) => {
       newClient.on("connect", () => {
         wsClients.push(newClient);
@@ -55,16 +58,21 @@ describe("vnsync server", () => {
     wsClients.splice(index, 1);
   };
 
-  const findUsernameInClients = (
-    username: string,
-    map: Map<string, VNSyncSocket>
+  const findInClients = (
+    value: string,
+    map: Map<string, VNSyncSocket>,
+    mode: "username" | "sid" = "username"
   ): VNSyncSocket => {
-    const client = [...map].filter(
-      ([_, client]) => client.data.username === username
-    )[0][1];
+    const client = [...map].filter(([sid, client]) => {
+      if (mode === "username") {
+        return client.data.username === value;
+      }
+
+      return sid === value;
+    })[0][1];
 
     if (!client) {
-      throw new Error(`username "${username}" was not found`);
+      throw new Error(`${mode} "${value}" was not found`);
     }
 
     return client;
@@ -217,10 +225,7 @@ describe("vnsync server", () => {
       expect(wsServer.roomsSnapshot.size).toEqual(2);
       expect(wsServer.clientsSnapshot.size).toEqual(1);
 
-      const userSnapshot = findUsernameInClients(
-        "user",
-        wsServer.clientsSnapshot
-      );
+      const userSnapshot = findInClients("user", wsServer.clientsSnapshot);
 
       expect(userSnapshot.data.username).toEqual("user");
     });
@@ -349,10 +354,7 @@ describe("vnsync server", () => {
       expect(wsServer.roomsSnapshot.size).toEqual(2);
       expect(wsServer.clientsSnapshot.size).toEqual(1);
 
-      const userSnapshot = findUsernameInClients(
-        "user",
-        wsServer.clientsSnapshot
-      );
+      const userSnapshot = findInClients("user", wsServer.clientsSnapshot);
 
       expect(userSnapshot.data.username).toEqual("user");
 
@@ -368,10 +370,7 @@ describe("vnsync server", () => {
       expect(wsServer.roomsSnapshot.size).toEqual(3);
       expect(wsServer.clientsSnapshot.size).toEqual(2);
 
-      const user2Snapshot = findUsernameInClients(
-        "user2",
-        wsServer.clientsSnapshot
-      );
+      const user2Snapshot = findInClients("user2", wsServer.clientsSnapshot);
 
       expect(user2Snapshot.data.username).toEqual("user2");
     });
@@ -850,8 +849,8 @@ describe("vnsync server", () => {
 
       expect(wsServer.addressesSnapshot.size).toEqual(1);
 
-      const address = findUsernameInClients("user", wsServer.clientsSnapshot)
-        .handshake.address;
+      const address = findInClients("user", wsServer.clientsSnapshot).handshake
+        .address;
 
       expect(wsServer.addressesSnapshot.get(address)).toEqual(1);
 
@@ -885,8 +884,8 @@ describe("vnsync server", () => {
 
       expect(wsServer.addressesSnapshot.size).toEqual(1);
 
-      const address = findUsernameInClients("user", wsServer.clientsSnapshot)
-        .handshake.address;
+      const address = findInClients("user", wsServer.clientsSnapshot).handshake
+        .address;
 
       expect(wsServer.addressesSnapshot.get(address)).toEqual(5);
 
@@ -927,8 +926,8 @@ describe("vnsync server", () => {
   describe("reconnection logic", () => {
     test("session cleanup works", async () => {
       await createRoom(user);
-      const sessionId = findUsernameInClients("user", wsServer.clientsSnapshot)
-        .data.sessionId;
+      const sessionId = findInClients("user", wsServer.clientsSnapshot).data
+        .sessionId;
 
       expect(wsServer.ghostSessionsSnapshot.size).toEqual(0);
 
@@ -962,6 +961,127 @@ describe("vnsync server", () => {
 
       expect(wsServer.roomsSnapshot.size).toEqual(0);
       expect(wsServer.clientsSnapshot.size).toEqual(0);
+    });
+
+    test("user gets session id event on connect", async () => {
+      const user2 = io(connectionString, {
+        autoConnect: false,
+      });
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(1);
+      const waitFor1st = counterOf(1);
+
+      user2.on("sessionId", (sessionId: string) => {
+        advanceEventCounter();
+
+        const originalSessionId = findInClients(
+          user2.id,
+          wsServer.clientsSnapshot,
+          "sid"
+        ).data.sessionId;
+
+        expect(sessionId).toEqual(originalSessionId);
+      });
+
+      user2.connect();
+
+      await waitFor1st;
+
+      user2.disconnect();
+      await wsServer.awaitForDisconnect();
+    });
+
+    test("user can reconnect", async () => {
+      const roomName = await createRoom(user);
+      const originalUserData = cloneDeep(
+        findInClients("user", wsServer.clientsSnapshot).data
+      );
+
+      const user2 = await addNewUserToARoom("user2", roomName);
+
+      expect(wsServer.roomsSnapshot.size).toEqual(3);
+      expect(wsServer.clientsSnapshot.size).toEqual(2);
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(1);
+      const waitFor1st = counterOf(1);
+
+      user2.on("roomStateChange", () => {
+        advanceEventCounter();
+      });
+
+      wsServer.countNextDisconnectAsUnexpected();
+      user.disconnect();
+      await wsServer.awaitForDisconnect();
+
+      expect(wsServer.roomsSnapshot.size).toEqual(2);
+      expect(wsServer.clientsSnapshot.size).toEqual(1);
+      expect(
+        wsServer.ghostSessionsSnapshot.get(originalUserData.sessionId)
+      ).toBeDefined();
+
+      const newClient = await getNewWsClient(originalUserData.sessionId);
+
+      await waitFor1st;
+
+      expect(wsServer.roomsSnapshot.size).toEqual(3);
+      expect(wsServer.clientsSnapshot.size).toEqual(2);
+      expect(wsServer.ghostSessionsSnapshot.size).toEqual(0);
+
+      wsServer.cleanGhostSessions();
+
+      expect(wsServer.roomsSnapshot.size).toEqual(3);
+
+      const newUser = findInClients("user", wsServer.clientsSnapshot);
+
+      expect(newUser.data).toEqual(originalUserData);
+      expect(wsServer.roomsSnapshot.get(roomName)?.has(newUser.id)).toEqual(
+        true
+      );
+
+      newClient.disconnect();
+      await wsServer.awaitForDisconnect();
+    });
+
+    test("user can't reconnect with session id if the room has already been closed", async () => {
+      const roomName = await createRoom(user);
+      const user2 = await addNewUserToARoom("user2", roomName);
+      const originalUser2Data = cloneDeep(
+        findInClients("user2", wsServer.clientsSnapshot).data
+      );
+
+      wsServer.countNextDisconnectAsUnexpected();
+      user2.disconnect();
+      await wsServer.awaitForDisconnect();
+
+      user.disconnect();
+      await wsServer.awaitForDisconnect();
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(1);
+      const waitFor1st = counterOf(1);
+
+      const socket = io(connectionString, {
+        reconnection: false,
+        auth: {
+          sessionId: originalUser2Data.sessionId,
+        },
+      });
+      socket.on("connect_error", (error: Error) => {
+        expect(error.message).toEqual(
+          "The room for this session no longer exists."
+        );
+
+        advanceEventCounter();
+
+        socket.close();
+      });
+
+      await waitFor1st;
+
+      expect(wsServer.roomsSnapshot.size).toEqual(0);
+      expect(wsServer.clientsSnapshot.size).toEqual(0);
+      expect(wsServer.ghostSessionsSnapshot.size).toEqual(0);
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
   });
 });
