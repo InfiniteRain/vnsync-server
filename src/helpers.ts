@@ -43,9 +43,8 @@ export const getRoomMembers = (
  * @param io The server instance.
  * @returns A map of clients.
  */
-export const getAllClients = (io: Server): Map<string, VNSyncSocket> => {
-  return io.of("/").sockets as Map<string, VNSyncSocket>;
-};
+export const getAllClients = (io: Server): Map<string, VNSyncSocket> =>
+  io.of("/").sockets as Map<string, VNSyncSocket>;
 
 /**
  * Gets a client by its socket ID.

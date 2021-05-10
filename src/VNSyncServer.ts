@@ -430,9 +430,7 @@ export class VNSyncServer {
 
     // Delete room and disconnect all users if host.
     if (socket.isHost) {
-      for (const member of getRoomMembers(this.io, roomName)) {
-        member.disconnect();
-      }
+      this.io.in(roomName).disconnectSockets();
 
       this.log.info(`Room ${roomName}: deleted`);
 
