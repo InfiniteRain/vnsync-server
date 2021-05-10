@@ -60,7 +60,7 @@ describe("vnsync server", () => {
     map: Map<string, VNSyncSocket>
   ): VNSyncSocket => {
     const client = [...map].filter(
-      ([_, client]) => client.username === username
+      ([_, client]) => client.data.username === username
     )[0][1];
 
     if (!client) {
@@ -160,7 +160,12 @@ describe("vnsync server", () => {
   };
 
   beforeEach(async () => {
-    wsServer = new VNSyncServer(log);
+    wsServer = new VNSyncServer(log, {
+      maxConnectionsFromSingleSource: 5,
+      maxClipboardEntries: 50,
+      ghostSessionLifetime: 0,
+      ghostSessionCleanupInterval: 99999999,
+    });
     wsServer.start(8080);
     user = await getNewWsClient();
   });
@@ -217,7 +222,7 @@ describe("vnsync server", () => {
         wsServer.clientsSnapshot
       );
 
-      expect(userSnapshot.username).toEqual("user");
+      expect(userSnapshot.data.username).toEqual("user");
     });
 
     test("user attempts to create room two times", async () => {
@@ -349,7 +354,7 @@ describe("vnsync server", () => {
         wsServer.clientsSnapshot
       );
 
-      expect(userSnapshot.username).toEqual("user");
+      expect(userSnapshot.data.username).toEqual("user");
 
       const newUser = await getNewWsClient();
       const result2 = await promiseEmit<EventResult<undefined>>(
@@ -368,7 +373,7 @@ describe("vnsync server", () => {
         wsServer.clientsSnapshot
       );
 
-      expect(user2Snapshot.username).toEqual("user2");
+      expect(user2Snapshot.data.username).toEqual("user2");
     });
 
     test("user attempts to join a room with a username that's already taken", async () => {
@@ -916,6 +921,47 @@ describe("vnsync server", () => {
       await wsServer.awaitForDisconnect();
 
       expect(wsServer.addressesSnapshot.size).toEqual(0);
+    });
+  });
+
+  describe("reconnection logic", () => {
+    test("session cleanup works", async () => {
+      await createRoom(user);
+      const sessionId = findUsernameInClients("user", wsServer.clientsSnapshot)
+        .data.sessionId;
+
+      expect(wsServer.ghostSessionsSnapshot.size).toEqual(0);
+
+      wsServer.countNextDisconnectAsUnexpected();
+      user.disconnect();
+      await wsServer.awaitForDisconnect();
+
+      expect(wsServer.ghostSessionsSnapshot.size).toEqual(1);
+      expect(wsServer.ghostSessionsSnapshot.get(sessionId)).toBeDefined();
+
+      wsServer.cleanGhostSessions();
+
+      expect(wsServer.ghostSessionsSnapshot.size).toEqual(0);
+    });
+
+    test("room gets disposed of after cleanup", async () => {
+      const roomName = await createRoom(user);
+      await addNewUserToARoom("user2", roomName);
+
+      expect(wsServer.roomsSnapshot.size).toEqual(3);
+      expect(wsServer.clientsSnapshot.size).toEqual(2);
+
+      wsServer.countNextDisconnectAsUnexpected();
+      user.disconnect();
+      await wsServer.awaitForDisconnect();
+
+      expect(wsServer.roomsSnapshot.size).toEqual(2);
+      expect(wsServer.clientsSnapshot.size).toEqual(1);
+
+      wsServer.cleanGhostSessions();
+
+      expect(wsServer.roomsSnapshot.size).toEqual(0);
+      expect(wsServer.clientsSnapshot.size).toEqual(0);
     });
   });
 });

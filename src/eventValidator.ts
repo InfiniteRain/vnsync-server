@@ -71,7 +71,7 @@ export const validateRoomPresence = <T = undefined>(
   socket: VNSyncSocket,
   expected: boolean
 ): EventResult<T> | null => {
-  const isInRoom = socket.room !== null;
+  const isInRoom = socket.data.room !== null;
 
   if (isInRoom === expected) {
     return null;

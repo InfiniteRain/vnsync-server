@@ -14,6 +14,9 @@ import {
 } from "./eventValidator";
 import { getAllClients, getRoomMembers, roomExists } from "./helpers";
 import { VNSyncSocket } from "./interfaces/VNSyncSocket";
+import { VNSyncData } from "./interfaces/VNSyncData";
+import { GhostSession } from "./interfaces/GhostSession";
+import { v4 as uuidv4 } from "uuid";
 
 /**
  * Default configuration.
@@ -25,6 +28,14 @@ const defaultConfiguration: Configuration = {
 
   maxClipboardEntries: Number.parseInt(
     process.env.MAX_CLIPBOARD_ENTRIES || "50"
+  ),
+
+  ghostSessionLifetime: Number.parseInt(
+    process.env.GHOST_SESSION_LIFETIME || "30000"
+  ),
+
+  ghostSessionCleanupInterval: Number.parseInt(
+    process.env.GHOST_SESSION_CLEANUP_INTERVAL || "1000"
   ),
 };
 
@@ -56,10 +67,27 @@ export class VNSyncServer {
   private readonly addresses: Map<string, number> = new Map();
 
   /**
+   * This map represents current ghost sessions.
+   */
+  private readonly ghostSessions: Map<string, GhostSession> = new Map();
+
+  /**
+   * The session cleanup interval.
+   */
+  private readonly sessionCleanupInterval: NodeJS.Timeout;
+
+  /**
    * A resolve function for a disconnect promise.
    * Used only for tests.
    */
   private disconnectResolve: (() => void) | null = null;
+
+  /**
+   * If set to true, then the next disconnection will count as unexpected
+   * regardless of the disconnection reason.
+   * Used only for tests.
+   */
+  private isNextDisconnectUnexpected = false;
 
   /**
    * Constructor.
@@ -87,6 +115,10 @@ export class VNSyncServer {
       },
     });
 
+    this.sessionCleanupInterval = setInterval(() => {
+      this.cleanGhostSessions();
+    }, this.configuration.ghostSessionCleanupInterval);
+
     this.initServer();
   }
 
@@ -109,6 +141,8 @@ export class VNSyncServer {
 
     this.io.close();
     this.httpServer.close();
+
+    clearInterval(this.sessionCleanupInterval);
   }
 
   /**
@@ -136,6 +170,14 @@ export class VNSyncServer {
   }
 
   /**
+   * Gets a snapshot of current ghost sessions, deeply cloned.
+   * Used only for tests.
+   */
+  public get ghostSessionsSnapshot(): Map<string, GhostSession> {
+    return cloneDeep(this.ghostSessions);
+  }
+
+  /**
    * Returns a promise that resolves once the next disconnection event cycle
    * completes.
    * Used only for tests.
@@ -146,6 +188,35 @@ export class VNSyncServer {
     return new Promise((resolve) => {
       this.disconnectResolve = resolve;
     });
+  }
+
+  /**
+   * Calling this function will make it so that the next disconnection will be
+   * counted as unexpected, regardless of the disconnection reason.
+   * Used only for tests.
+   */
+  public countNextDisconnectAsUnexpected(): void {
+    if (this.isNextDisconnectUnexpected) {
+      throw new Error("Already waiting for a disonnection.");
+    }
+
+    this.isNextDisconnectUnexpected = true;
+  }
+
+  /**
+   * Cleans expired ghost sessions.
+   */
+  public cleanGhostSessions(): void {
+    for (const [sessionId, ghostSession] of this.ghostSessions.entries()) {
+      const threshold =
+        ghostSession.leftAt + this.configuration.ghostSessionLifetime;
+      if (Date.now() >= threshold) {
+        this.log.info(`Ghost session ${sessionId}: cleaned.`);
+
+        this.handleRoomDisconnect(ghostSession.data);
+        this.ghostSessions.delete(sessionId);
+      }
+    }
   }
 
   /**
@@ -167,14 +238,6 @@ export class VNSyncServer {
         const socket = connectionSocket as VNSyncSocket;
 
         this.log.info(`Socket ${socket.id}: connecting...`);
-
-        socket.username = "";
-        socket.isHost = false;
-        socket.room = null;
-        socket.isReady = false;
-        socket.clipboard = [];
-
-        this.addAddress(socket.handshake.address);
 
         socket.on("createRoom", (...args: unknown[]) => {
           const callback = args.pop() as (result: EventResult<string>) => void;
@@ -232,7 +295,7 @@ export class VNSyncServer {
             return;
           }
 
-          const result = this.onToggleReady(socket, socket.room || "");
+          const result = this.onToggleReady(socket, socket.data.room || "");
 
           this.log.info(`Event toggleReady emitted by ${socket.id}:`, result);
 
@@ -258,7 +321,7 @@ export class VNSyncServer {
           const result = this.onUpdateClipboard(
             socket,
             clipboardEntry,
-            socket.room || ""
+            socket.data.room || ""
           );
 
           this.log.info(
@@ -269,10 +332,10 @@ export class VNSyncServer {
           callback(result);
         });
 
-        socket.on("disconnect", () => {
+        socket.on("disconnect", (reason) => {
           this.log.info(`Socket ${socket.id}: disconnected`);
 
-          this.onDisconnect(socket);
+          this.onDisconnect(socket, reason);
           this.removeAddress(socket.handshake.address);
 
           if (this.disconnectResolve !== null) {
@@ -280,6 +343,17 @@ export class VNSyncServer {
             this.disconnectResolve = null;
           }
         });
+
+        socket.data = {
+          username: "",
+          isHost: false,
+          room: null,
+          isReady: false,
+          clipboard: [],
+          sessionId: uuidv4(),
+        };
+
+        this.addAddress(socket.handshake.address);
 
         this.log.info(`Socket ${socket.id}: connected`);
       });
@@ -298,9 +372,9 @@ export class VNSyncServer {
   ): EventResult<string> {
     const roomName = this.generateRoomName();
 
-    socket.username = username;
-    socket.room = roomName;
-    socket.isHost = true;
+    socket.data.username = username;
+    socket.data.room = roomName;
+    socket.data.isHost = true;
     socket.join(roomName);
 
     this.emitRoomStateChange(roomName);
@@ -334,7 +408,7 @@ export class VNSyncServer {
     }
 
     for (const member of getRoomMembers(this.io, roomName)) {
-      if (member.username === username) {
+      if (member.data.username === username) {
         return {
           status: "fail",
           failMessage: `Username "${username}" is already taken by someone else in this room.`,
@@ -342,8 +416,8 @@ export class VNSyncServer {
       }
     }
 
-    socket.room = roomName;
-    socket.username = username;
+    socket.data.room = roomName;
+    socket.data.username = username;
     socket.join(roomName);
 
     this.emitRoomStateChange(roomName);
@@ -366,12 +440,14 @@ export class VNSyncServer {
     socket: VNSyncSocket,
     roomName: string
   ): EventResult<undefined> {
-    socket.isReady = !socket.isReady;
+    socket.data.isReady = !socket.data.isReady;
 
     this.entireRoomReadyCheck(roomName);
     this.emitRoomStateChange(roomName);
 
-    this.log.info(`Connection ${roomName}/${socket.username}: toggled state`);
+    this.log.info(
+      `Connection ${roomName}/${socket.data.username}: toggled state`
+    );
 
     return {
       status: "ok",
@@ -391,15 +467,15 @@ export class VNSyncServer {
     clipboardEntry: string,
     roomName: string
   ): EventResult<undefined> {
-    if (!socket.isHost) {
+    if (!socket.data.isHost) {
       return {
         status: "fail",
         failMessage: "This user is not a host.",
       };
     }
 
-    socket.clipboard.unshift(clipboardEntry);
-    socket.clipboard = socket.clipboard.slice(
+    socket.data.clipboard.unshift(clipboardEntry);
+    socket.data.clipboard = socket.data.clipboard.slice(
       0,
       this.configuration.maxClipboardEntries
     );
@@ -415,21 +491,48 @@ export class VNSyncServer {
    * Method that gets triggered on "disconnect" event.
    *
    * @param socket The socket that triggered the event.
+   * @param reason Reason for disconnection.
    * @returns The event result.
    */
-  private onDisconnect(socket: VNSyncSocket): void {
-    const roomName = socket.room;
+  private onDisconnect(socket: VNSyncSocket, reason: string): void {
+    const badReasons = ["ping timeout", "transport close", "transport error"];
+
+    if (badReasons.includes(reason) || this.isNextDisconnectUnexpected) {
+      this.isNextDisconnectUnexpected = false;
+
+      this.ghostSessions.set(socket.data.sessionId, {
+        leftAt: Date.now(),
+        data: socket.data,
+      });
+
+      const handle = socket.data.room
+        ? `Connection ${socket.data.room}/${socket.data.username}`
+        : `Socket ${socket.id}`;
+      this.log.info(
+        `${handle}: disconnected with a bad reason, keeping a ghost session...`
+      );
+
+      return;
+    }
+
+    this.handleRoomDisconnect(socket.data);
+  }
+
+  /**
+   * Handles the room state on client disconnection.
+   *
+   * @param data Data of the socket.
+   */
+  private handleRoomDisconnect(data: VNSyncData): void {
+    const roomName = data?.room;
 
     if (!roomName || !roomExists(this.io, roomName)) {
       return;
     }
 
-    socket.leave(roomName);
+    this.log.info(`Connection ${roomName}/${data.username}: left`);
 
-    this.log.info(`Connection ${roomName}/${socket.username}: left`);
-
-    // Delete room and disconnect all users if host.
-    if (socket.isHost) {
+    if (data.isHost) {
       this.io.in(roomName).disconnectSockets();
 
       this.log.info(`Room ${roomName}: deleted`);
@@ -437,7 +540,6 @@ export class VNSyncServer {
       return;
     }
 
-    // Emit a state change event if not host.
     this.entireRoomReadyCheck(roomName);
     this.emitRoomStateChange(roomName);
   }
@@ -505,15 +607,15 @@ export class VNSyncServer {
   private emitRoomStateChange(roomName: string): void {
     const members = getRoomMembers(this.io, roomName);
 
-    const host = members.find((member) => member.isHost);
+    const host = members.find((member) => member.data.isHost);
     const membersState = members.map((member) => ({
-      username: member.username,
-      isReady: member.isReady,
-      isHost: member.isHost,
+      username: member.data.username,
+      isReady: member.data.isReady,
+      isHost: member.data.isHost,
     }));
 
     const state = {
-      clipboard: host?.clipboard || [],
+      clipboard: host?.data?.clipboard || [],
       membersState,
     };
 
@@ -535,8 +637,9 @@ export class VNSyncServer {
 
     const members = getRoomMembers(this.io, roomName);
     const everyoneIsReady = members.reduce(
-      (previousValue, currentValue) => previousValue && currentValue.isReady,
-      members[0].isReady
+      (previousValue, currentValue) =>
+        previousValue && currentValue.data.isReady,
+      members[0].data.isReady
     );
 
     if (!everyoneIsReady) {
@@ -544,10 +647,10 @@ export class VNSyncServer {
     }
 
     for (const member of members) {
-      member.isReady = false;
+      member.data.isReady = false;
     }
 
-    const host = members.find((member) => member.isHost);
+    const host = members.find((member) => member.data.isHost);
 
     if (!host) {
       return;
