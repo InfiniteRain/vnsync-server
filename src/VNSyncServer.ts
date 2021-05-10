@@ -420,13 +420,13 @@ export class VNSyncServer {
   private onDisconnect(socket: VNSyncSocket): void {
     const roomName = socket.room;
 
-    this.log.info(`Connection ${roomName}/${socket.username}: left`);
-
     if (!roomName || !roomExists(this.io, roomName)) {
       return;
     }
 
     socket.leave(roomName);
+
+    this.log.info(`Connection ${roomName}/${socket.username}: left`);
 
     // Delete room and disconnect all users if host.
     if (socket.isHost) {
