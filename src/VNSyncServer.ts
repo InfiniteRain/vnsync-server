@@ -12,7 +12,12 @@ import {
   validateEventArguments,
   validateRoomPresence,
 } from "./eventValidator";
-import { getAllClients, getRoomMembers, roomExists } from "./helpers";
+import {
+  getAllClients,
+  getClientBySessionId,
+  getRoomMembers,
+  roomExists,
+} from "./helpers";
 import { VNSyncSocket } from "./interfaces/VNSyncSocket";
 import { VNSyncData } from "./interfaces/VNSyncData";
 import { GhostSession } from "./interfaces/GhostSession";
@@ -236,11 +241,15 @@ export class VNSyncServer {
       })
       .use((socket, next) => {
         const sessionId = socket.handshake.auth.sessionId;
-        const ghostSession = this.ghostSessions.get(sessionId);
 
-        if (sessionId) {
-          this.log.info(`Connection with sessionId: ${sessionId}`);
+        if (!sessionId) {
+          next();
+          return;
         }
+
+        this.log.info(`Connection with sessionId: ${sessionId}`);
+
+        const ghostSession = this.ghostSessions.get(sessionId);
 
         if (ghostSession) {
           this.ghostSessions.delete(sessionId);
@@ -253,6 +262,19 @@ export class VNSyncServer {
           }
 
           socket.data = ghostSession.data;
+
+          next();
+          return;
+        }
+
+        const existingUser = getClientBySessionId(this.io, sessionId);
+
+        if (existingUser) {
+          socket.data = existingUser.data;
+
+          this.log.info(`Matching connection found: ${sessionId}`);
+
+          existingUser.disconnect();
         }
 
         next();
@@ -374,7 +396,7 @@ export class VNSyncServer {
 
         const roomName = socket.data.room;
 
-        if (roomName && !roomExists(this.io, roomName)) {
+        if (roomName && !roomExists(this.io, roomName) && !socket.data.isHost) {
           socket.disconnect();
 
           return;

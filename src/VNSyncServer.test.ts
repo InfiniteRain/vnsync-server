@@ -1042,6 +1042,70 @@ describe("vnsync server", () => {
       await wsServer.awaitForDisconnect();
     });
 
+    test("host can reconnect even when server still has the previous conenction going", async () => {
+      await createRoom(user);
+      const originalUserData = cloneDeep(
+        findInClients("user", wsServer.clientsSnapshot).data
+      );
+
+      expect(wsServer.roomsSnapshot.size).toEqual(2);
+      expect(wsServer.clientsSnapshot.size).toEqual(1);
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(1);
+      const waitFor1st = counterOf(1);
+
+      user.on("disconnect", () => {
+        advanceEventCounter();
+      });
+
+      const newUser = await getNewWsClient(originalUserData.sessionId);
+
+      await waitFor1st;
+
+      expect(wsServer.roomsSnapshot.size).toEqual(2);
+      expect(wsServer.clientsSnapshot.size).toEqual(1);
+
+      const newUserData = findInClients("user", wsServer.clientsSnapshot).data;
+      expect(newUserData).toEqual(originalUserData);
+
+      newUser.disconnect();
+      await wsServer.awaitForDisconnect();
+    });
+
+    test("user can reconnect even when server still has the previous conenction going", async () => {
+      const roomName = await createRoom(user);
+      const user2 = await addNewUserToARoom("user2", roomName);
+      const originalUser2Data = cloneDeep(
+        findInClients("user2", wsServer.clientsSnapshot).data
+      );
+
+      expect(wsServer.roomsSnapshot.size).toEqual(3);
+      expect(wsServer.clientsSnapshot.size).toEqual(2);
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(1);
+      const waitFor1st = counterOf(1);
+
+      user2.on("disconnect", () => {
+        advanceEventCounter();
+      });
+
+      const newUser2 = await getNewWsClient(originalUser2Data.sessionId);
+
+      await waitFor1st;
+
+      expect(wsServer.roomsSnapshot.size).toEqual(3);
+      expect(wsServer.clientsSnapshot.size).toEqual(2);
+
+      const newUser2Data = findInClients("user2", wsServer.clientsSnapshot)
+        .data;
+      expect(newUser2Data).toEqual(originalUser2Data);
+
+      newUser2.disconnect();
+      await wsServer.awaitForDisconnect();
+      user.disconnect();
+      await wsServer.awaitForDisconnect();
+    });
+
     test("user can't reconnect with session id if the room has already been closed", async () => {
       const roomName = await createRoom(user);
       const user2 = await addNewUserToARoom("user2", roomName);

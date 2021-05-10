@@ -47,6 +47,28 @@ export const getAllClients = (io: Server): Map<string, VNSyncSocket> =>
   io.of("/").sockets as Map<string, VNSyncSocket>;
 
 /**
+ * Gets a client by its session ID.
+ *
+ * @param io The server instance.
+ * @param sessionId The session ID of the client in question.
+ * @returns The client in question.
+ */
+export const getClientBySessionId = (
+  io: Server,
+  sessionId: string
+): VNSyncSocket | null => {
+  const clients = getAllClients(io);
+
+  for (const client of clients.values()) {
+    if (client.data.sessionId === sessionId) {
+      return client;
+    }
+  }
+
+  return null;
+};
+
+/**
  * Gets a client by its socket ID.
  *
  * @param io The server instance.
