@@ -10,6 +10,7 @@ import {
   string,
   validateEventArguments,
   validateRoomPresence,
+  ValidationRule,
 } from "./eventValidator";
 import {
   getAllClients,
@@ -22,6 +23,8 @@ import { VNSyncData } from "./interfaces/VNSyncData";
 import { GhostSession } from "./interfaces/GhostSession";
 import { v4 as uuidv4 } from "uuid";
 import { EventResult } from "./interfaces/EventResult";
+import { Socket } from "socket.io";
+import { ExtendedError } from "socket.io/dist/namespace";
 
 /**
  * Default configuration.
@@ -225,60 +228,120 @@ export class VNSyncServer {
   }
 
   /**
+   * Middleware that checks connection limit.
+   *
+   * @param socket The socket in question.
+   * @param next Next middleware function.
+   */
+  private connectionLimitMiddleware(
+    socket: Socket,
+    next: (err?: ExtendedError | undefined) => void
+  ): void {
+    if (this.isAddressBlocked(socket.handshake.address)) {
+      next(new Error("Too many connections from the same address."));
+      return;
+    }
+
+    next();
+  }
+
+  /**
+   * Middleware that handles reconnection logic.
+   *
+   * @param socket The socket in question.
+   * @param next Next middleware function.
+   */
+  private reconnectionMiddleare(
+    socket: Socket,
+    next: (err?: ExtendedError | undefined) => void
+  ): void {
+    const sessionId = socket.handshake.auth.sessionId;
+
+    if (!sessionId) {
+      next();
+      return;
+    }
+
+    this.log.info(`Connection with sessionId: ${sessionId}`);
+
+    const ghostSession = this.ghostSessions.get(sessionId);
+
+    if (ghostSession) {
+      this.ghostSessions.delete(sessionId);
+
+      this.log.info(`Ghost session found: ${sessionId}`);
+
+      if (!roomExists(this.io, ghostSession.data.room || "")) {
+        next(new Error("The room for this session no longer exists."));
+        return;
+      }
+
+      socket.data = ghostSession.data;
+
+      next();
+      return;
+    }
+
+    const existingUser = getClientBySessionId(this.io, sessionId);
+
+    if (existingUser) {
+      socket.data = existingUser.data;
+
+      this.log.info(`Matching connection found: ${sessionId}`);
+
+      existingUser.disconnect();
+    }
+
+    next();
+  }
+
+  /**
+   * Registers a socket event by validating event data and attaching it to the
+   * appropriate method.
+   *
+   * @param socket The socket for which to register the event.
+   * @param eventName The name of the event.
+   * @param eventMethod The method of the event.
+   * @param argumentsValidation Validation rules for event data.
+   * @param requirePresence Expected room presence. True for the client being
+   * present in a room, and false for not.
+   */
+  private registerEvent<T = void>(
+    socket: Socket,
+    eventName: string,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    eventMethod: (socket: Socket, ...args: any[]) => EventResult<T>,
+    argumentsValidation: ValidationRule[],
+    requirePresence: boolean
+  ) {
+    socket.on(eventName, (...args: unknown[]) => {
+      const callback = args.pop() as (result: EventResult<T>) => void;
+      const validationError =
+        validateEventArguments<T>(argumentsValidation, args) ||
+        validateRoomPresence<T>(socket, requirePresence);
+
+      if (validationError) {
+        callback(validationError);
+        return;
+      }
+
+      const result = eventMethod.bind(this)(socket, ...args);
+
+      this.log.info(`Event ${eventName} emitted by ${socket.id}:`, result);
+
+      callback(result);
+    });
+  }
+
+  /**
    * Initializes the WebSocket server.
    */
   private initServer(): void {
     this.log.info("Initializing the server...");
 
     this.io
-      .use((socket, next) => {
-        if (this.isAddressBlocked(socket.handshake.address)) {
-          next(new Error("Too many connections from the same address."));
-          return;
-        }
-
-        next();
-      })
-      .use((socket, next) => {
-        const sessionId = socket.handshake.auth.sessionId;
-
-        if (!sessionId) {
-          next();
-          return;
-        }
-
-        this.log.info(`Connection with sessionId: ${sessionId}`);
-
-        const ghostSession = this.ghostSessions.get(sessionId);
-
-        if (ghostSession) {
-          this.ghostSessions.delete(sessionId);
-
-          this.log.info(`Ghost session found: ${sessionId}`);
-
-          if (!roomExists(this.io, ghostSession.data.room || "")) {
-            next(new Error("The room for this session no longer exists."));
-            return;
-          }
-
-          socket.data = ghostSession.data;
-
-          next();
-          return;
-        }
-
-        const existingUser = getClientBySessionId(this.io, sessionId);
-
-        if (existingUser) {
-          socket.data = existingUser.data;
-
-          this.log.info(`Matching connection found: ${sessionId}`);
-
-          existingUser.disconnect();
-        }
-
-        next();
-      })
+      .use((socket, next) => this.connectionLimitMiddleware(socket, next))
+      .use((socket, next) => this.reconnectionMiddleare(socket, next))
       .on("connection", (connectionSocket) => {
         const socket = connectionSocket as VNSyncSocket;
 
@@ -289,92 +352,28 @@ export class VNSyncServer {
 
         this.addAddress(socket.handshake.address);
 
-        socket.on("createRoom", (...args: unknown[]) => {
-          const callback = args.pop() as (result: EventResult<string>) => void;
-          const username = args[0] as string;
-          const validationError =
-            validateEventArguments<string>(
-              [nonEmptyString("Username")],
-              [username]
-            ) || validateRoomPresence<string>(socket, false);
-
-          if (validationError) {
-            callback(validationError);
-            return;
-          }
-
-          const result = this.onCreateRoom(socket, username);
-
-          this.log.info(`Event createRoom emitted by ${socket.id}:`, result);
-
-          callback(result);
-        });
-
-        socket.on("joinRoom", (...args: unknown[]) => {
-          const callback = args.pop() as (result: EventResult) => void;
-          const username = args[0] as string;
-          const roomName = args[1] as string;
-          const validationError =
-            validateEventArguments(
-              [nonEmptyString("Username"), nonEmptyString("Room name")],
-              [username, roomName]
-            ) || validateRoomPresence(socket, false);
-
-          if (validationError) {
-            callback(validationError);
-            return;
-          }
-
-          const result = this.onJoinRoom(socket, username, roomName);
-
-          this.log.info(`Event joinRoom emitted by ${socket.id}:`, result);
-
-          callback(result);
-        });
-
-        socket.on("toggleReady", (...args: unknown[]) => {
-          const callback = args.pop() as (result: EventResult) => void;
-          const validationError = validateRoomPresence(socket, true);
-
-          if (validationError) {
-            callback(validationError);
-            return;
-          }
-
-          const result = this.onToggleReady(socket, socket.data.room || "");
-
-          this.log.info(`Event toggleReady emitted by ${socket.id}:`, result);
-
-          callback(result);
-        });
-
-        socket.on("updateClipboard", (...args: unknown[]) => {
-          const callback = args.pop() as (result: EventResult) => void;
-          const clipboardEntry = args[0] as string;
-          const validationError =
-            validateEventArguments(
-              [string("Clipboard entry")],
-              [clipboardEntry]
-            ) || validateRoomPresence(socket, true);
-
-          if (validationError) {
-            callback(validationError);
-            return;
-          }
-
-          const result = this.onUpdateClipboard(
-            socket,
-            clipboardEntry,
-            socket.data.room || ""
-          );
-
-          this.log.info(
-            `Event updateClipboard emitted by ${socket.id}:`,
-            result
-          );
-
-          callback(result);
-        });
+        this.registerEvent<string>(
+          socket,
+          "createRoom",
+          this.onCreateRoom,
+          [nonEmptyString("Username")],
+          false
+        );
+        this.registerEvent(
+          socket,
+          "joinRoom",
+          this.onJoinRoom,
+          [nonEmptyString("Username"), nonEmptyString("Room name")],
+          false
+        );
+        this.registerEvent(socket, "toggleReady", this.onToggleReady, [], true);
+        this.registerEvent(
+          socket,
+          "updateClipboard",
+          this.onUpdateClipboard,
+          [string("Clipboard entry")],
+          true
+        );
 
         socket.on("disconnect", (reason) => {
           this.log.info(`Socket ${socket.id}: disconnected`);
@@ -388,38 +387,47 @@ export class VNSyncServer {
           }
         });
 
-        const roomName = socket.data.room;
-
-        if (roomName && !roomExists(this.io, roomName) && !socket.data.isHost) {
-          socket.disconnect();
-
-          return;
-        }
-
-        if (roomName) {
-          socket.join(roomName);
-          this.emitRoomStateChange(roomName);
-
-          this.log.info(
-            `Connection ${roomName}/${socket.data.username}: reconnected`
-          );
-
-          return;
-        }
-
-        const sessionId = uuidv4();
-
-        socket.data = {
-          sessionId,
-          username: "",
-          isHost: false,
-          room: null,
-          isReady: false,
-          clipboard: [],
-        };
-
-        socket.emit("sessionId", sessionId);
+        this.onConnect(socket);
       });
+  }
+
+  /**
+   * Method that gets triggered when a socket connects.
+   *
+   * @param socket The socket that triggered the event.
+   */
+  private onConnect(socket: VNSyncSocket): void {
+    const roomName = socket.data.room;
+
+    if (roomName && !roomExists(this.io, roomName) && !socket.data.isHost) {
+      socket.disconnect();
+
+      return;
+    }
+
+    if (roomName) {
+      socket.join(roomName);
+      this.emitRoomStateChange(roomName);
+
+      this.log.info(
+        `Connection ${roomName}/${socket.data.username}: reconnected`
+      );
+
+      return;
+    }
+
+    const sessionId = uuidv4();
+
+    socket.data = {
+      sessionId,
+      username: "",
+      isHost: false,
+      room: null,
+      isReady: false,
+      clipboard: [],
+    };
+
+    socket.emit("sessionId", sessionId);
   }
 
   /**
@@ -497,10 +505,11 @@ export class VNSyncServer {
    * Method that gets triggered on "toggleReady" event.
    *
    * @param socket The socket that triggered the event.
-   * @param roomName The room that the event got triggered for.
    * @returns The event result.
    */
-  private onToggleReady(socket: VNSyncSocket, roomName: string): EventResult {
+  private onToggleReady(socket: VNSyncSocket): EventResult {
+    const roomName = socket.data.room || "";
+
     socket.data.isReady = !socket.data.isReady;
 
     this.entireRoomReadyCheck(roomName);
@@ -521,13 +530,11 @@ export class VNSyncServer {
    *
    * @param socket The socket that triggered the event.
    * @param clipboardEntry The clipboard entry.
-   * @param roomName The room that the event got triggered for.
    * @returns The event result.
    */
   private onUpdateClipboard(
     socket: VNSyncSocket,
-    clipboardEntry: string,
-    roomName: string
+    clipboardEntry: string
   ): EventResult {
     if (!socket.data.isHost) {
       return {
@@ -535,6 +542,8 @@ export class VNSyncServer {
         failMessage: "This user is not a host.",
       };
     }
+
+    const roomName = socket.data.room || "";
 
     socket.data.clipboard.unshift(clipboardEntry);
     socket.data.clipboard = socket.data.clipboard.slice(
@@ -555,7 +564,6 @@ export class VNSyncServer {
    *
    * @param socket The socket that triggered the event.
    * @param reason Reason for disconnection.
-   * @returns The event result.
    */
   private onDisconnect(socket: VNSyncSocket, reason: string): void {
     const badReasons = ["ping timeout", "transport close", "transport error"];

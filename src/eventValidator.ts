@@ -6,7 +6,7 @@ import { VNSyncSocket } from "./interfaces/VNSyncSocket";
  * returns a tuple of [boolean, string]. The boolean is whether or not the
  * check has passed the validation, and string is the error message.
  */
-type ValidationRule = (arg: unknown) => [boolean, string];
+export type ValidationRule = (arg: unknown) => [boolean, string];
 
 /**
  * A function used to validate event arguments.
