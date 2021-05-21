@@ -2,7 +2,6 @@ import express from "express";
 import path from "path";
 import { createServer, Server as HTTPServer } from "http";
 import { Server } from "socket.io";
-import { EventResult } from "./interfaces/EventResult";
 import { cloneDeep } from "lodash";
 import { Logger } from "loglevel";
 import { Configuration } from "./interfaces/Configuration";
@@ -22,6 +21,7 @@ import { VNSyncSocket } from "./interfaces/VNSyncSocket";
 import { VNSyncData } from "./interfaces/VNSyncData";
 import { GhostSession } from "./interfaces/GhostSession";
 import { v4 as uuidv4 } from "uuid";
+import { EventResult } from "./interfaces/EventResult";
 
 /**
  * Default configuration.
@@ -311,9 +311,7 @@ export class VNSyncServer {
         });
 
         socket.on("joinRoom", (...args: unknown[]) => {
-          const callback = args.pop() as (
-            result: EventResult<undefined>
-          ) => void;
+          const callback = args.pop() as (result: EventResult) => void;
           const username = args[0] as string;
           const roomName = args[1] as string;
           const validationError =
@@ -335,9 +333,7 @@ export class VNSyncServer {
         });
 
         socket.on("toggleReady", (...args: unknown[]) => {
-          const callback = args.pop() as (
-            result: EventResult<undefined>
-          ) => void;
+          const callback = args.pop() as (result: EventResult) => void;
           const validationError = validateRoomPresence(socket, true);
 
           if (validationError) {
@@ -353,9 +349,7 @@ export class VNSyncServer {
         });
 
         socket.on("updateClipboard", (...args: unknown[]) => {
-          const callback = args.pop() as (
-            result: EventResult<undefined>
-          ) => void;
+          const callback = args.pop() as (result: EventResult) => void;
           const clipboardEntry = args[0] as string;
           const validationError =
             validateEventArguments(
@@ -468,7 +462,7 @@ export class VNSyncServer {
     socket: VNSyncSocket,
     username: string,
     roomName: string
-  ): EventResult<undefined> {
+  ): EventResult {
     if (!roomExists(this.io, roomName)) {
       return {
         status: "fail",
@@ -495,6 +489,7 @@ export class VNSyncServer {
 
     return {
       status: "ok",
+      data: undefined,
     };
   }
 
@@ -505,10 +500,7 @@ export class VNSyncServer {
    * @param roomName The room that the event got triggered for.
    * @returns The event result.
    */
-  private onToggleReady(
-    socket: VNSyncSocket,
-    roomName: string
-  ): EventResult<undefined> {
+  private onToggleReady(socket: VNSyncSocket, roomName: string): EventResult {
     socket.data.isReady = !socket.data.isReady;
 
     this.entireRoomReadyCheck(roomName);
@@ -520,6 +512,7 @@ export class VNSyncServer {
 
     return {
       status: "ok",
+      data: undefined,
     };
   }
 
@@ -535,7 +528,7 @@ export class VNSyncServer {
     socket: VNSyncSocket,
     clipboardEntry: string,
     roomName: string
-  ): EventResult<undefined> {
+  ): EventResult {
     if (!socket.data.isHost) {
       return {
         status: "fail",
@@ -553,6 +546,7 @@ export class VNSyncServer {
 
     return {
       status: "ok",
+      data: undefined,
     };
   }
 

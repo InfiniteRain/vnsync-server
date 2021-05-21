@@ -1,19 +1,9 @@
+import { EventFailedResult } from "./EventFailResult";
+import { EventSuccessResult } from "./EventSuccessResult";
+
 /**
- * Interface representing a result (outcome) of an event.
+ * A union type representing an event result.
  */
-export interface EventResult<T> {
-  /**
-   * The status of the result.
-   */
-  status: "ok" | "fail";
-
-  /**
-   * The data associated with a successful result.
-   */
-  data?: T;
-
-  /**
-   * The fail message associated with a failed result.
-   */
-  failMessage?: string;
-}
+export type EventResult<T = undefined> =
+  | EventSuccessResult<T>
+  | EventFailedResult;

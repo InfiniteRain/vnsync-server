@@ -1,9 +1,11 @@
 import { io, Socket } from "socket.io-client";
 import { VNSyncServer } from "./VNSyncServer";
-import { EventResult } from "./interfaces/EventResult";
 import { cloneDeep } from "lodash";
 import { getLogger } from "loglevel";
 import { VNSyncSocket } from "./interfaces/VNSyncSocket";
+import { EventFailedResult } from "./interfaces/EventFailResult";
+import { EventSuccessResult } from "./interfaces/EventSuccessResult";
+import { EventResult } from "./interfaces/EventResult";
 
 describe("vnsync server", () => {
   type RoomState = {
@@ -23,6 +25,22 @@ describe("vnsync server", () => {
   const connectionString = "ws://localhost:8080";
 
   log.setLevel("silent");
+
+  function assertSuccessResult<T>(
+    eventResult: EventResult<T>
+  ): asserts eventResult is EventSuccessResult<T> {
+    if (eventResult.status !== "ok") {
+      throw new Error("Result is not a success.");
+    }
+  }
+
+  function assertFailResult<T>(
+    eventResult: EventResult<T>
+  ): asserts eventResult is EventFailedResult {
+    if (eventResult.status !== "fail") {
+      throw new Error("Result is not a failure.");
+    }
+  }
 
   const promiseEmit = <T>(
     socket: Socket,
@@ -96,7 +114,7 @@ describe("vnsync server", () => {
       roomName
     );
 
-    expect(result.status).toEqual("ok");
+    assertSuccessResult(result);
 
     return newUser;
   };
@@ -108,7 +126,7 @@ describe("vnsync server", () => {
       "user"
     );
 
-    expect(result.status).toEqual("ok");
+    assertSuccessResult(result);
 
     if (result.data === undefined) {
       throw new Error("room name is undefined");
@@ -191,7 +209,7 @@ describe("vnsync server", () => {
     test("user attempts to create a room with no username provided", async () => {
       const result = await promiseEmit<EventResult<string>>(user, "createRoom");
 
-      expect(result.status).toEqual("fail");
+      assertFailResult(result);
       expect(result.failMessage).toEqual(
         "Username should be a non-empty string."
       );
@@ -202,7 +220,7 @@ describe("vnsync server", () => {
         ""
       );
 
-      expect(result2.status).toEqual("fail");
+      assertFailResult(result2);
       expect(result2.failMessage).toEqual(
         "Username should be a non-empty string."
       );
@@ -218,9 +236,10 @@ describe("vnsync server", () => {
         "user"
       );
 
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
       expect(typeof result.data).toEqual("string");
       expect(result.data?.length).toBeGreaterThan(0);
+      // @ts-expect-error Type mismatch is expected in here.
       expect(result.failMessage).toBeUndefined();
       expect(wsServer.roomsSnapshot.size).toEqual(2);
       expect(wsServer.clientsSnapshot.size).toEqual(1);
@@ -237,7 +256,7 @@ describe("vnsync server", () => {
         "user"
       );
 
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
 
       const result2 = await promiseEmit<EventResult<string>>(
         user,
@@ -245,8 +264,9 @@ describe("vnsync server", () => {
         "user"
       );
 
-      expect(result2.status).toEqual("fail");
+      assertFailResult(result2);
       expect(result2.failMessage).toEqual("This user is already in a room.");
+      // @ts-expect-error Type mismatch is expected in here.
       expect(result2.data).toBeUndefined();
     });
 
@@ -257,7 +277,7 @@ describe("vnsync server", () => {
         "user"
       );
 
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
 
       const result2 = await promiseEmit<EventResult<undefined>>(
         user,
@@ -266,8 +286,9 @@ describe("vnsync server", () => {
         "someNonExistentRoom"
       );
 
-      expect(result2.status).toEqual("fail");
+      assertFailResult(result2);
       expect(result2.failMessage).toEqual("This user is already in a room.");
+      // @ts-expect-error Type mismatch is expected in here.
       expect(result2.data).toBeUndefined();
     });
 
@@ -278,7 +299,7 @@ describe("vnsync server", () => {
         "user"
       );
 
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
 
       const newUser = await getNewWsClient();
       const result2 = await promiseEmit<EventResult<undefined>>(
@@ -286,7 +307,7 @@ describe("vnsync server", () => {
         "joinRoom"
       );
 
-      expect(result2.status).toEqual("fail");
+      assertFailResult(result2);
       expect(result2.failMessage).toEqual(
         "Username should be a non-empty string."
       );
@@ -297,7 +318,7 @@ describe("vnsync server", () => {
         ""
       );
 
-      expect(result3.status).toEqual("fail");
+      assertFailResult(result3);
       expect(result3.failMessage).toEqual(
         "Username should be a non-empty string."
       );
@@ -308,7 +329,7 @@ describe("vnsync server", () => {
         "room"
       );
 
-      expect(result4.status).toEqual("fail");
+      assertFailResult(result4);
       expect(result4.failMessage).toEqual(
         "Room name should be a non-empty string."
       );
@@ -320,7 +341,7 @@ describe("vnsync server", () => {
         ""
       );
 
-      expect(result5.status).toEqual("fail");
+      assertFailResult(result5);
       expect(result5.failMessage).toEqual(
         "Room name should be a non-empty string."
       );
@@ -335,8 +356,9 @@ describe("vnsync server", () => {
         roomName
       );
 
-      expect(result.status).toEqual("fail");
+      assertFailResult(result);
       expect(result.failMessage).toEqual(`Room "${roomName}" doesn't exist.`);
+      // @ts-expect-error Type mismatch is expected in here.
       expect(result.data).toBeUndefined();
     });
 
@@ -350,7 +372,7 @@ describe("vnsync server", () => {
         "user"
       );
 
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
       expect(wsServer.roomsSnapshot.size).toEqual(2);
       expect(wsServer.clientsSnapshot.size).toEqual(1);
 
@@ -366,7 +388,7 @@ describe("vnsync server", () => {
         result.data
       );
 
-      expect(result2.status).toEqual("ok");
+      assertSuccessResult(result2);
       expect(wsServer.roomsSnapshot.size).toEqual(3);
       expect(wsServer.clientsSnapshot.size).toEqual(2);
 
@@ -382,7 +404,7 @@ describe("vnsync server", () => {
         "user"
       );
 
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
 
       const newUser = await getNewWsClient();
       const result2 = await promiseEmit<EventResult<undefined>>(
@@ -392,7 +414,7 @@ describe("vnsync server", () => {
         result.data
       );
 
-      expect(result2.status).toEqual("fail");
+      assertFailResult(result2);
       expect(result2.failMessage).toEqual(
         'Username "user" is already taken by someone else in this room.'
       );
@@ -421,7 +443,7 @@ describe("vnsync server", () => {
         "user"
       );
 
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
       expect(wsServer.roomsSnapshot.size).toEqual(2);
       expect(wsServer.clientsSnapshot.size).toEqual(1);
 
@@ -447,7 +469,7 @@ describe("vnsync server", () => {
         "user"
       );
 
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
       expect(wsServer.roomsSnapshot.size).toEqual(2);
       expect(wsServer.clientsSnapshot.size).toEqual(1);
 
@@ -468,8 +490,9 @@ describe("vnsync server", () => {
     test("user attempts to toggle the ready state while not in a room", async () => {
       const result = await emitToggleReady(user);
 
-      expect(result.status).toEqual("fail");
+      assertFailResult(result);
       expect(result.failMessage).toEqual("This user is not yet in a room.");
+      // @ts-expect-error Type mismatch is expected in here.
       expect(result.data).toBeUndefined();
     });
 
@@ -510,7 +533,7 @@ describe("vnsync server", () => {
         roomName
       );
 
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
 
       await waitFor3rd;
     });
@@ -581,19 +604,19 @@ describe("vnsync server", () => {
       });
 
       const result = await emitToggleReady(user);
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
 
       await waitFor3rd;
 
       expectedRoomState.membersState[2].isReady = true;
       const result2 = await emitToggleReady(user3);
-      expect(result2.status).toEqual("ok");
+      assertSuccessResult(result2);
 
       await waitFor6th;
 
       expectedRoomState.membersState[0].isReady = false;
       const result3 = await emitToggleReady(user);
-      expect(result3.status).toEqual("ok");
+      assertSuccessResult(result3);
 
       await waitFor9th;
     });
@@ -748,8 +771,9 @@ describe("vnsync server", () => {
     test("host attempts to update clipboard while not in a room", async () => {
       const result = await emitUpdateClipboard(user, "something");
 
-      expect(result.status).toEqual("fail");
+      assertFailResult(result);
       expect(result.failMessage).toEqual("This user is not yet in a room.");
+      // @ts-expect-error Type mismatch is expected in here.
       expect(result.data).toBeUndefined();
     });
 
@@ -758,8 +782,9 @@ describe("vnsync server", () => {
       // @ts-expect-error Type mismatch is expected in here.
       const result = await emitUpdateClipboard(user, undefined);
 
-      expect(result.status).toEqual("fail");
+      assertFailResult(result);
       expect(result.failMessage).toEqual("Clipboard entry should be a string.");
+      // @ts-expect-error Type mismatch is expected in here.
       expect(result.data).toBeUndefined();
     });
 
@@ -769,8 +794,9 @@ describe("vnsync server", () => {
 
       const result = await emitUpdateClipboard(user2, "something");
 
-      expect(result.status).toEqual("fail");
+      assertFailResult(result);
       expect(result.failMessage).toEqual("This user is not a host.");
+      // @ts-expect-error Type mismatch is expected in here.
       expect(result.data).toBeUndefined();
     });
 
@@ -797,13 +823,13 @@ describe("vnsync server", () => {
       expectedRoomState.clipboard.unshift("text1");
 
       const result = await emitUpdateClipboard(user, "text1");
-      expect(result.status).toEqual("ok");
+      assertSuccessResult(result);
       await waitFor1st;
 
       expectedRoomState.clipboard.unshift("text2");
 
       const result2 = await emitUpdateClipboard(user, "text2");
-      expect(result2.status).toEqual("ok");
+      assertSuccessResult(result2);
       await waitFor2nd;
     });
 
@@ -835,7 +861,7 @@ describe("vnsync server", () => {
         expectedRoomState.clipboard = expectedRoomState.clipboard.slice(0, 50);
 
         const result = await emitUpdateClipboard(user, clipboardEntry);
-        expect(result.status).toEqual("ok");
+        assertSuccessResult(result);
         await waitFors[index];
       }
     });
