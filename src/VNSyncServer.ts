@@ -30,20 +30,13 @@ import { ExtendedError } from "socket.io/dist/namespace";
  * Default configuration.
  */
 const defaultConfiguration: Configuration = {
-  maxConnectionsFromSingleSource: Number.parseInt(
-    process.env.MAX_CONNECTIONS_FROM_SINGLE_SOURCE || "5"
+  maxConnectionsFromSingleSource: Number(
+    process.env.MAX_CONNECTIONS_FROM_SINGLE_SOURCE || 5
   ),
-
-  maxClipboardEntries: Number.parseInt(
-    process.env.MAX_CLIPBOARD_ENTRIES || "50"
-  ),
-
-  ghostSessionLifetime: Number.parseInt(
-    process.env.GHOST_SESSION_LIFETIME || "30000"
-  ),
-
-  ghostSessionCleanupInterval: Number.parseInt(
-    process.env.GHOST_SESSION_CLEANUP_INTERVAL || "1000"
+  maxClipboardEntries: Number(process.env.MAX_CLIPBOARD_ENTRIES || 50),
+  ghostSessionLifetime: Number(process.env.GHOST_SESSION_LIFETIME || 30000),
+  ghostSessionCleanupInterval: Number(
+    process.env.GHOST_SESSION_CLEANUP_INTERVAL || 1000
   ),
 };
 
