@@ -244,7 +244,7 @@ export class VNSyncServer {
    * @param socket The socket in question.
    * @param next Next middleware function.
    */
-  private reconnectionMiddleare(
+  private reconnectionMiddleware(
     socket: Socket,
     next: (err?: ExtendedError | undefined) => void
   ): void {
@@ -334,7 +334,7 @@ export class VNSyncServer {
 
     this.io
       .use((socket, next) => this.connectionLimitMiddleware(socket, next))
-      .use((socket, next) => this.reconnectionMiddleare(socket, next))
+      .use((socket, next) => this.reconnectionMiddleware(socket, next))
       .on("connection", (connectionSocket) => {
         const socket = connectionSocket as VNSyncSocket;
 

@@ -5,4 +5,4 @@ const log = getLogger("vnsync");
 log.setLevel("info");
 
 const server = new VNSyncServer(log);
-server.start(Number.parseInt(process.env.PORT || "8080"));
+server.start(Number(process.env.PORT || 8080));
