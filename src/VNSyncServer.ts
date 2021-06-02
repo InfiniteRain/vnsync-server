@@ -264,7 +264,10 @@ export class VNSyncServer {
 
       this.log.info(`Ghost session found: ${sessionId}`);
 
-      if (!roomExists(this.io, ghostSession.data.room || "")) {
+      if (
+        !roomExists(this.io, ghostSession.data.room || "") &&
+        !ghostSession.data.isHost
+      ) {
         next(new Error("The room for this session no longer exists."));
         return;
       }

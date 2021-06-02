@@ -59,10 +59,14 @@ describe("vnsync server", () => {
       connectionString,
       sessionId ? { auth: { sessionId } } : undefined
     );
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       newClient.on("connect", () => {
         wsClients.push(newClient);
         resolve(newClient);
+      });
+
+      newClient.on("connect_error", (reason) => {
+        reject(reason);
       });
     });
   };
@@ -1068,7 +1072,37 @@ describe("vnsync server", () => {
       await wsServer.awaitForDisconnect();
     });
 
-    test("host can reconnect even when server still has the previous conenction going", async () => {
+    test("host can reconnect if alone in the room", async () => {
+      await createRoom(user);
+      const originalUserData = cloneDeep(
+        findInClients("user", wsServer.clientsSnapshot).data
+      );
+
+      const [advanceEventCounter, counterOf] = generateEventCounter(1);
+      const waitFor1st = counterOf(1);
+
+      user.on("disconnect", () => {
+        advanceEventCounter();
+      });
+
+      wsServer.countNextDisconnectAsUnexpected();
+      user.disconnect();
+
+      await waitFor1st;
+
+      const newUser = await getNewWsClient(originalUserData.sessionId);
+
+      expect(wsServer.roomsSnapshot.size).toEqual(2);
+      expect(wsServer.clientsSnapshot.size).toEqual(1);
+
+      const newUserData = findInClients("user", wsServer.clientsSnapshot).data;
+      expect(newUserData).toEqual(originalUserData);
+
+      newUser.disconnect();
+      await wsServer.awaitForDisconnect();
+    });
+
+    test("host can reconnect even when server still has the previous connection going", async () => {
       await createRoom(user);
       const originalUserData = cloneDeep(
         findInClients("user", wsServer.clientsSnapshot).data
@@ -1098,7 +1132,7 @@ describe("vnsync server", () => {
       await wsServer.awaitForDisconnect();
     });
 
-    test("user can reconnect even when server still has the previous conenction going", async () => {
+    test("user can reconnect even when server still has the previous connection going", async () => {
       const roomName = await createRoom(user);
       const user2 = await addNewUserToARoom("user2", roomName);
       const originalUser2Data = cloneDeep(
